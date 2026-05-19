@@ -4,13 +4,12 @@ import { createRalphLoopState, runRalphLoop } from './ralphLoop.service.ts';
 
 const PR_VERIFY_URL_COMMAND = 'gh pr view --json url --jq .url';
 const PR_VERIFY_READY_COMMAND = 'test "$(gh pr view --json isDraft --jq .isDraft)" = "false"';
-const CI_WATCH_COMMAND = 'gh pr checks --watch --fail-fast --required || true';
-const CI_LIST_FAILED_COMMAND =
-  'gh pr checks --required --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail") | "\\(.name) (\\(.state)) \\(.link // "")"\'';
-const CI_ASSERT_NONE_FAILED_COMMAND =
-  'test -z "$(gh pr checks --required --json name,bucket --jq \'.[] | select(.bucket == \\"fail\\") | .name\')"';
-const CI_MERGE_COMMAND =
-  'gh pr merge --delete-branch --merge || gh pr merge --delete-branch --auto';
+const CI_WATCH_COMMAND = 'gh pr checks --watch --fail-fast || true';
+const CI_ASSERT_HAS_CHECKS_COMMAND =
+  'checks="$(gh pr checks --json name --jq \'.[0].name // empty\')"; test -n "$checks" || { echo "no CI checks reported on this PR"; exit 1; }';
+const CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND =
+  'blocking="$(gh pr checks --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail" or .bucket == "pending" or .bucket == "cancel") | "\\(.name) [\\(.bucket)] \\(.link // "")"\')"; test -z "$blocking" || { printf "%s\\n" "$blocking"; exit 1; }';
+const CI_MERGE_COMMAND = 'gh pr merge --delete-branch --merge';
 
 const createCommandExecutor = (
   sequence: string[],
@@ -799,8 +798,8 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_READY_COMMAND}`,
       'phase:merge-condition',
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_LIST_FAILED_COMMAND}`,
-      `command:${CI_ASSERT_NONE_FAILED_COMMAND}`,
+      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
       `command:${CI_MERGE_COMMAND}`,
     ]);
   });
@@ -815,8 +814,8 @@ describe('runRalphLoop', () => {
       { code: 0 },
       { code: 0 },
       { code: 0 },
-      { code: 0, stdout: 'build (FAIL) https://github.com/example/repo/actions/runs/1' },
-      { code: 1 },
+      { code: 0 },
+      { code: 1, stdout: 'build [fail] https://github.com/example/repo/actions/runs/1' },
     ]);
     const agent = createAgentExecutor(sequence, []);
     const automation = createCompletionAutomationExecutor(sequence, [
@@ -851,8 +850,8 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_LIST_FAILED_COMMAND}`,
-      `command:${CI_ASSERT_NONE_FAILED_COMMAND}`,
+      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
     ]);
     expect(outcome.result).toEqual({
       kind: 'continue',
@@ -918,19 +917,129 @@ describe('runRalphLoop', () => {
           stderr: '',
         },
         {
-          command: CI_LIST_FAILED_COMMAND,
+          command: CI_ASSERT_HAS_CHECKS_COMMAND,
           code: 0,
-          stdout: 'build (FAIL) https://github.com/example/repo/actions/runs/1',
+          stdout: '',
           stderr: '',
         },
         {
-          command: CI_ASSERT_NONE_FAILED_COMMAND,
+          command: CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND,
           code: 1,
-          stdout: '',
+          stdout: 'build [fail] https://github.com/example/repo/actions/runs/1',
           stderr: '',
         },
       ],
     });
+  });
+
+  test('returns continue when CI is still pending after the watch step', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 1, stdout: 'build [pending] https://github.com/example/repo/actions/runs/2' },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'ci-passed',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
+    ]);
+    expect(outcome.result.kind).toBe('continue');
+    if (outcome.result.kind !== 'continue') {
+      throw new Error('expected continue');
+    }
+    expect(outcome.result.reason).toBe('merge-condition-failed');
+  });
+
+  test('returns continue when no CI checks are reported', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 1, stdout: 'no CI checks reported on this PR' },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'ci-passed',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+    ]);
+    expect(outcome.result.kind).toBe('continue');
+    if (outcome.result.kind !== 'continue') {
+      throw new Error('expected continue');
+    }
+    expect(outcome.result.reason).toBe('merge-condition-failed');
   });
 
   test('passed review and acceptance criteria are reused after a completion failure', async () => {
