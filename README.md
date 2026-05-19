@@ -32,19 +32,19 @@ After configuration, the checks run automatically when the task tries to finish.
 
 ### Completion modes
 
-| Mode       | Behavior                                                              |
-| ---------- | --------------------------------------------------------------------- |
-| `only-edit` | No git checks — just static checks and optional review/AC            |
-| `commit`    | Requires clean working tree (no uncommitted changes)                  |
-| `pr`        | Commit checks + creates a ready-for-review PR via `gh`               |
-| `draft-pr`  | Commit checks + creates a draft PR via `gh`                          |
+| Mode        | Behavior                                                  |
+| ----------- | --------------------------------------------------------- |
+| `only-edit` | No git checks — just static checks and optional review/AC |
+| `commit`    | Requires clean working tree (no uncommitted changes)      |
+| `pr`        | Commit checks + creates a ready-for-review PR via `gh`    |
+| `draft-pr`  | Commit checks + creates a draft PR via `gh`               |
 
 ### Merge conditions
 
-| Condition    | Behavior                                                   |
-| ------------ | ---------------------------------------------------------- |
-| `none`       | No merge automation                                        |
-| `ci-passed`  | Wait for CI to pass on the PR, then auto-merge and cleanup |
+| Condition   | Behavior                                                   |
+| ----------- | ---------------------------------------------------------- |
+| `none`      | No merge automation                                        |
+| `ci-passed` | Wait for CI to pass on the PR, then auto-merge and cleanup |
 
 ## Package Structure
 
