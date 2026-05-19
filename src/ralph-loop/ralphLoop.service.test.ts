@@ -2,6 +2,16 @@ import { describe, expect, test } from 'vitest';
 
 import { createRalphLoopState, runRalphLoop } from './ralphLoop.service.ts';
 
+const PR_VERIFY_URL_COMMAND = 'gh pr view --json url --jq .url';
+const PR_VERIFY_READY_COMMAND = 'test "$(gh pr view --json isDraft --jq .isDraft)" = "false"';
+const CI_WATCH_COMMAND = 'gh pr checks --watch --fail-fast --required || true';
+const CI_LIST_FAILED_COMMAND =
+  'gh pr checks --required --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail") | "\\(.name) (\\(.state)) \\(.link // "")"\'';
+const CI_ASSERT_NONE_FAILED_COMMAND =
+  'test -z "$(gh pr checks --required --json name,bucket --jq \'.[] | select(.bucket == \\"fail\\") | .name\')"';
+const CI_MERGE_COMMAND =
+  'gh pr merge --delete-branch --merge || gh pr merge --delete-branch --auto';
+
 const createCommandExecutor = (
   sequence: string[],
   results: ReadonlyArray<{
@@ -66,6 +76,56 @@ const createAgentExecutor = (
     }
 
     sequence.push(`agent:${request.kind}`);
+    calls.push(request);
+    index += 1;
+
+    return Promise.resolve(nextResult);
+  };
+
+  return {
+    calls,
+    execute,
+  };
+};
+
+const createCompletionAutomationExecutor = (
+  sequence: string[],
+  results: ReadonlyArray<
+    | {
+        readonly result: 'accept';
+        readonly message: string;
+      }
+    | {
+        readonly result: 'reject';
+        readonly reason: string;
+      }
+  >,
+) => {
+  const calls: Array<{
+    kind: 'pull-request';
+    mode: 'pr' | 'draft-pr';
+    pullRequestTemplate?: {
+      path: string;
+      content: string;
+    };
+  }> = [];
+  let index = 0;
+
+  const execute = (request: {
+    kind: 'pull-request';
+    mode: 'pr' | 'draft-pr';
+    pullRequestTemplate?: {
+      path: string;
+      content: string;
+    };
+  }) => {
+    const nextResult = results[index];
+
+    if (nextResult === undefined) {
+      throw new Error(`Unexpected completion automation request: ${request.kind}`);
+    }
+
+    sequence.push(`automation:${request.mode}`);
     calls.push(request);
     index += 1;
 
@@ -479,6 +539,397 @@ describe('runRalphLoop', () => {
         ],
         completionChecks: [],
       },
+    });
+  });
+
+  test('runs PR automation after commit checks and verifies the ready PR state', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'none',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+        pullRequestTemplate: {
+          path: '/repo/.github/pull_request_template.md',
+          content: '## Summary',
+        },
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+    ]);
+    expect(automation.calls).toEqual([
+      {
+        kind: 'pull-request',
+        mode: 'pr',
+        pullRequestTemplate: {
+          path: '/repo/.github/pull_request_template.md',
+          content: '## Summary',
+        },
+      },
+    ]);
+    expect(outcome.result).toEqual({
+      kind: 'completed',
+      completion: 'pr',
+      mergeCondition: 'none',
+      staticChecks: [
+        {
+          command: 'pnpm gatecheck check',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+      agentChecks: [],
+      completionChecks: [
+        {
+          command: 'git diff --quiet --exit-code',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: 'git diff --cached --quiet --exit-code',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: 'test -z "$(git ls-files --others --exclude-standard)"',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: PR_VERIFY_URL_COMMAND,
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: PR_VERIFY_READY_COMMAND,
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+      completionAutomation: [
+        {
+          kind: 'pull-request',
+          mode: 'pr',
+          outcome: {
+            result: 'accept',
+            message: 'Created PR https://github.com/example/repo/pull/123',
+          },
+        },
+      ],
+    });
+  });
+
+  test('returns continue when PR automation rejects after commit checks', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'reject',
+        reason: 'current branch is main',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'draft-pr',
+        mergeCondition: 'none',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:draft-pr',
+    ]);
+    expect(outcome.result).toEqual({
+      kind: 'continue',
+      reason: 'completion-automation-failed',
+      completion: 'draft-pr',
+      mergeCondition: 'none',
+      staticChecks: [
+        {
+          command: 'pnpm gatecheck check',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+      agentChecks: [],
+      completionChecks: [
+        {
+          command: 'git diff --quiet --exit-code',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: 'git diff --cached --quiet --exit-code',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: 'test -z "$(git ls-files --others --exclude-standard)"',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+      completionAutomation: [
+        {
+          kind: 'pull-request',
+          mode: 'draft-pr',
+          outcome: {
+            result: 'reject',
+            reason: 'current branch is main',
+          },
+        },
+      ],
+    });
+  });
+
+  test('waits for CI and merges automatically after PR automation passes', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'ci-passed',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      {
+        onCompletionAutomationStarted: () => {
+          sequence.push('phase:completion-automation');
+        },
+        onMergeConditionStarted: () => {
+          sequence.push('phase:merge-condition');
+        },
+      },
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'phase:completion-automation',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+      'phase:merge-condition',
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_LIST_FAILED_COMMAND}`,
+      `command:${CI_ASSERT_NONE_FAILED_COMMAND}`,
+      `command:${CI_MERGE_COMMAND}`,
+    ]);
+  });
+
+  test('returns continue when CI fails after PR automation succeeds', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0, stdout: 'build (FAIL) https://github.com/example/repo/actions/runs/1' },
+      { code: 1 },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'ci-passed',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_LIST_FAILED_COMMAND}`,
+      `command:${CI_ASSERT_NONE_FAILED_COMMAND}`,
+    ]);
+    expect(outcome.result).toEqual({
+      kind: 'continue',
+      reason: 'merge-condition-failed',
+      completion: 'pr',
+      mergeCondition: 'ci-passed',
+      staticChecks: [
+        {
+          command: 'pnpm gatecheck check',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+      agentChecks: [],
+      completionChecks: [
+        {
+          command: 'git diff --quiet --exit-code',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: 'git diff --cached --quiet --exit-code',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: 'test -z "$(git ls-files --others --exclude-standard)"',
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: PR_VERIFY_URL_COMMAND,
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: PR_VERIFY_READY_COMMAND,
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+      completionAutomation: [
+        {
+          kind: 'pull-request',
+          mode: 'pr',
+          outcome: {
+            result: 'accept',
+            message: 'Created PR https://github.com/example/repo/pull/123',
+          },
+        },
+      ],
+      mergeConditionChecks: [
+        {
+          command: CI_WATCH_COMMAND,
+          code: 0,
+          stdout: '',
+          stderr: '',
+        },
+        {
+          command: CI_LIST_FAILED_COMMAND,
+          code: 0,
+          stdout: 'build (FAIL) https://github.com/example/repo/actions/runs/1',
+          stderr: '',
+        },
+        {
+          command: CI_ASSERT_NONE_FAILED_COMMAND,
+          code: 1,
+          stdout: '',
+          stderr: '',
+        },
+      ],
     });
   });
 

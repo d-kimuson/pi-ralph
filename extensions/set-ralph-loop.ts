@@ -16,11 +16,22 @@ import {
   type RunAgentCheckOptions,
 } from '../src/ralph-loop/agentCheckRunner.service.ts';
 import {
+  runCompletionAutomation,
+  type RunCompletionAutomationOptions,
+} from '../src/ralph-loop/completionAutomationRunner.service.ts';
+import { loadPullRequestTemplate } from '../src/ralph-loop/pullRequestTemplate.service.ts';
+import {
   runRalphLoop,
   type RalphLoopCommandResult,
   type RalphLoopOutcome,
   type RalphLoopParams,
 } from '../src/ralph-loop/ralphLoop.service.ts';
+import {
+  buildConfigurationGuidance,
+  isPullRequestCompletion,
+  requiresGitHubCli,
+  validateRalphLoopParams,
+} from '../src/ralph-loop/ralphLoopConfig.service.ts';
 
 const TOOL_TIMEOUT_MS = 10 * 60 * 1000;
 const activeLoopsBySession = new Map<string, ActiveRalphLoop>();
@@ -65,8 +76,16 @@ const executeShellCommand = async (
 };
 
 const lastCommand = (
-  results: readonly RalphLoopCommandResult[],
-): RalphLoopCommandResult | undefined => results.at(-1);
+  results: readonly RalphLoopCommandResult[] | undefined,
+): RalphLoopCommandResult | undefined => results?.at(-1);
+
+const lastMeaningfulOutput = (
+  results: readonly RalphLoopCommandResult[] | undefined,
+): string | undefined =>
+  results
+    ?.toReversed()
+    .flatMap((result) => [result.stderr.trim(), result.stdout.trim()])
+    .find((value) => value !== '');
 
 const notifyProgress = (message: string, ctx: ExtensionContext): void => {
   if (ctx.hasUI) {
@@ -90,7 +109,7 @@ const summarizeResult = (outcome: RalphLoopOutcome): string => {
 
   switch (result.kind) {
     case 'completed': {
-      return 'set-ralph-loop completed: all configured static, agent, and completion checks passed.';
+      return 'set-ralph-loop completed: all configured static checks, agent checks, completion automation, and merge conditions passed.';
     }
     case 'continue': {
       if (result.reason === 'static-check-failed') {
@@ -107,6 +126,24 @@ const summarizeResult = (outcome: RalphLoopOutcome): string => {
         return failedCheck === undefined
           ? 'set-ralph-loop requires more work: a completion check failed.'
           : `set-ralph-loop requires more work: completion check failed (${failedCheck.command}).`;
+      }
+
+      if (result.reason === 'completion-automation-failed') {
+        const failedAutomation = result.completionAutomation?.at(-1);
+
+        if (failedAutomation?.outcome.result === 'reject') {
+          return `set-ralph-loop requires more work: ${failedAutomation.mode} automation failed (${failedAutomation.outcome.reason}).`;
+        }
+
+        return 'set-ralph-loop requires more work: a completion automation step failed.';
+      }
+
+      if (result.reason === 'merge-condition-failed') {
+        const details = lastMeaningfulOutput(result.mergeConditionChecks);
+
+        return details === undefined
+          ? 'set-ralph-loop requires more work: a merge condition failed.'
+          : `set-ralph-loop requires more work: merge condition failed (${details}).`;
       }
 
       const failedAgentCheck = result.agentChecks.at(-1);
@@ -144,6 +181,33 @@ const createAgentCheckOptions = (ctx: ExtensionContext): RunAgentCheckOptions =>
   },
 });
 
+const createCompletionAutomationOptions = (
+  ctx: ExtensionContext,
+): RunCompletionAutomationOptions => ({
+  onMissingCompletionAutomationToolCall: (attempt, maxContinuationAttempts) => {
+    notifyProgress(
+      `set-ralph-loop: completion automation finished without a report; retrying (${attempt}/${maxContinuationAttempts})...`,
+      ctx,
+    );
+  },
+});
+
+const ensureGitHubCliAvailable = async (
+  pi: ExtensionAPI,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<void> => {
+  const result = await pi.exec('bash', ['-lc', 'command -v gh >/dev/null 2>&1'], {
+    cwd,
+    signal,
+    timeout: TOOL_TIMEOUT_MS,
+  });
+
+  if (result.code !== 0) {
+    throw new Error('GitHub CLI (gh) is required for the configured PR or merge automation.');
+  }
+};
+
 const runConfiguredLoop = async (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -161,6 +225,10 @@ const runConfiguredLoop = async (
 
   try {
     notifyProgress('set-ralph-loop: running static checks...', ctx);
+
+    const pullRequestTemplate = isPullRequestCompletion(advanced.params.completion)
+      ? await loadPullRequestTemplate(pi.exec.bind(pi), ctx.cwd, ctx.signal)
+      : undefined;
 
     const outcome = await runRalphLoop(
       advanced.params,
@@ -195,6 +263,34 @@ const runConfiguredLoop = async (
             ctx,
           );
         },
+        onCompletionAutomationStarted: (mode) => {
+          notifyProgress(
+            mode === 'pr'
+              ? 'set-ralph-loop: commit checks passed. creating or updating the ready PR...'
+              : 'set-ralph-loop: commit checks passed. creating or updating the draft PR...',
+            ctx,
+          );
+        },
+        onMergeConditionStarted: () => {
+          notifyProgress(
+            'set-ralph-loop: PR automation passed. waiting for CI and merging automatically when possible...',
+            ctx,
+          );
+        },
+      },
+      {
+        executeCompletionAutomation: (request) =>
+          runCompletionAutomation(
+            pi.exec.bind(pi),
+            ctx.cwd,
+            ctx.signal,
+            {
+              ...request,
+              pullRequestTemplate,
+            },
+            createCompletionAutomationOptions(ctx),
+          ),
+        pullRequestTemplate,
       },
     );
 
@@ -253,12 +349,21 @@ const assertNever = (value: never): never => {
   throw new Error(`Unexpected value: ${String(value)}`);
 };
 
-const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
+const createConfigurationResponseText = (params: RalphLoopParams): string => {
+  const guidance = buildConfigurationGuidance(params);
+
+  return [
+    'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when the task tries to finish.',
+    ...guidance,
+  ].join('\n\n');
+};
+
+const createSetRalphLoopTool = (pi: ExtensionAPI) =>
   defineTool({
     name: 'set-ralph-loop',
     label: 'Set Ralph Loop',
     description:
-      "Set the task's completion conditions before focused work starts. After that, set-ralph-loop automatically runs the configured static checks, optional agent checks, and completion policy whenever the task tries to finish, and it keeps the task open until they pass.",
+      "Set the task's completion conditions before focused work starts. After that, set-ralph-loop automatically runs the configured static checks, optional agent checks, completion automation, and merge policy whenever the task tries to finish, and it keeps the task open until they pass.",
     promptSnippet:
       'Call set-ralph-loop once at task start to configure done criteria; after that the checks run automatically until they pass.',
     promptGuidelines: [
@@ -267,6 +372,7 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
       'After configuration, keep working normally; set-ralph-loop will automatically run the configured checks whenever the task tries to finish.',
       'Configuring set-ralph-loop does not complete the task and does not ask you to call it again later.',
       'If set-ralph-loop reports a failure, continue working on the task instead of trying to configure it again.',
+      'When completion is pr or draft-pr, commit your changes yourself and create the working branch yourself; set-ralph-loop will handle the PR automation later.',
     ],
     executionMode: 'sequential',
     parameters: Type.Object({
@@ -278,11 +384,21 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
           description: "Static checks that define the task's done criteria.",
         },
       ),
-      completion: Type.Union([Type.Literal('only-edit'), Type.Literal('commit')], {
-        description: 'Completion policy that must hold after the static checks pass.',
-      }),
-      mergeCondition: Type.Literal('none', {
-        description: 'Reserved for future merge gating. Only none is currently supported.',
+      completion: Type.Union(
+        [
+          Type.Literal('only-edit'),
+          Type.Literal('commit'),
+          Type.Literal('pr'),
+          Type.Literal('draft-pr'),
+        ],
+        {
+          description:
+            'Completion policy that must hold after the static checks pass. pr and draft-pr also trigger pull-request automation after commit cleanliness checks pass.',
+        },
+      ),
+      mergeCondition: Type.Union([Type.Literal('none'), Type.Literal('ci-passed')], {
+        description:
+          'Optional merge policy. ci-passed waits for GitHub CI on the PR and automatically merges when no failed checks remain.',
       }),
       review: Type.Optional(
         Type.Boolean({
@@ -297,8 +413,18 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
       ),
     }),
 
-    execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const normalizedParams = normalizeParams(params);
+      const validation = validateRalphLoopParams(normalizedParams);
+
+      if (validation.kind === 'invalid') {
+        throw new Error(validation.message);
+      }
+
+      if (requiresGitHubCli(normalizedParams)) {
+        await ensureGitHubCliAvailable(pi, ctx.cwd, ctx.signal);
+      }
+
       const sessionKey = createSessionKey(ctx.cwd, ctx.sessionManager.getSessionId());
       const configured = createActiveRalphLoop(
         activeLoopsBySession.get(sessionKey),
@@ -306,7 +432,7 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
       );
 
       if (configured.kind === 'blocked') {
-        return Promise.resolve({
+        return {
           content: [
             {
               type: 'text',
@@ -314,7 +440,7 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
             },
           ],
           details: configured,
-        });
+        };
       }
 
       activeLoopsBySession.set(sessionKey, configured.activeLoop);
@@ -323,15 +449,15 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
         ctx,
       );
 
-      return Promise.resolve({
+      return {
         content: [
           {
             type: 'text',
-            text: 'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when the task tries to finish.',
+            text: createConfigurationResponseText(normalizedParams),
           },
         ],
         details: configured,
-      });
+      };
     },
   });
 
