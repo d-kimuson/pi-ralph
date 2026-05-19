@@ -353,7 +353,8 @@ const createConfigurationResponseText = (params: RalphLoopParams): string => {
   const guidance = buildConfigurationGuidance(params);
 
   return [
-    'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when the task tries to finish.',
+    'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when you are done and stop taking further actions.',
+    'Trigger condition: when you believe the task is complete, do not wait, do not run sleep, and do not run unrelated confirmation commands just to see whether ralph-loop fires. Simply stop and let the current turn end; ralph-loop will start automatically from that agent_end.',
     'From this point on, ralph-loop enters its self-evaluation loop. Do not expect normal back-and-forth with the user; proceed autonomously and make the remaining implementation decisions yourself unless the goal itself becomes unclear or needs to change.',
     ...guidance,
   ].join('\n\n');
@@ -366,11 +367,12 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
     description:
       "Set the task's completion conditions before focused work starts. After that, set-ralph-loop automatically runs the configured static checks, optional agent checks, completion automation, and merge policy whenever the task tries to finish, and it keeps the task open until they pass.",
     promptSnippet:
-      'Call set-ralph-loop once at task start to configure done criteria; after that the checks run automatically until they pass.',
+      'Call set-ralph-loop once at task start to configure done criteria; after that, when you believe the task is done, stop taking actions and let agent_end trigger the checks automatically.',
     promptGuidelines: [
       'At the start of a task, call set-ralph-loop once with the static checks and completion policy that define done.',
       'Do not call set-ralph-loop again after it has been configured for the current session and directory.',
       'After configuration, keep working normally; set-ralph-loop will automatically run the configured checks whenever the task tries to finish.',
+      'When you believe the task is done, do not wait, do not run sleep, and do not run unrelated commands just to check whether ralph-loop starts. Simply stop so the current turn can end and the agent_end hook can fire.',
       'After configuration, assume ralph-loop will take over the endgame as a self-evaluation loop; proceed autonomously instead of expecting further user back-and-forth.',
       'Configuring set-ralph-loop does not complete the task and does not ask you to call it again later.',
       'If set-ralph-loop reports a failure, continue working on the task instead of trying to configure it again.',
