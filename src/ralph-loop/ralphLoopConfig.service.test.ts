@@ -27,6 +27,14 @@ describe('ralphLoopConfig.service', () => {
     expect(
       requiresGitHubCli({
         staticChecks: [],
+        completion: 'draft-pr',
+        mergeCondition: 'comment-fixed',
+        review: false,
+      }),
+    ).toBe(true);
+    expect(
+      requiresGitHubCli({
+        staticChecks: [],
         completion: 'commit',
         mergeCondition: 'none',
         review: false,
@@ -34,7 +42,7 @@ describe('ralphLoopConfig.service', () => {
     ).toBe(false);
   });
 
-  test('rejects ci-passed without PR automation', () => {
+  test('rejects merge automation without PR automation', () => {
     expect(
       validateRalphLoopParams({
         staticChecks: [],
@@ -46,19 +54,30 @@ describe('ralphLoopConfig.service', () => {
       kind: 'invalid',
       message: 'mergeCondition=ci-passed requires completion=pr or completion=draft-pr.',
     });
+    expect(
+      validateRalphLoopParams({
+        staticChecks: [],
+        completion: 'commit',
+        mergeCondition: 'comment-fixed',
+        review: false,
+      }),
+    ).toEqual({
+      kind: 'invalid',
+      message: 'mergeCondition=comment-fixed requires completion=pr or completion=draft-pr.',
+    });
   });
 
-  test('returns configuration guidance for PR automation and CI auto-merge', () => {
+  test('returns configuration guidance for PR automation and merge automation', () => {
     expect(
       buildConfigurationGuidance({
         staticChecks: [],
         completion: 'pr',
-        mergeCondition: 'ci-passed',
+        mergeCondition: 'comment-fixed',
         review: false,
       }),
     ).toEqual([
       'completion: pr を設定したので、完了後は set-ralph-loop が自動で PR を作成します。あなたが PR を手動で作成する必要はありませんが、コミットは自身で行ってください。PR を作成するためのブランチは自身で切ってください。',
-      'mergeCondition: ci-passed を設定したので、PR 作成後は set-ralph-loop が gh で CI 完了を待ち、失敗がなければ自動でマージします。CI が失敗した場合はタスクを開いたまま自動で作業ループに戻します。',
+      'mergeCondition: comment-fixed を設定したので、PR 作成後はまず ci-passed と同様に CI 完了を待ちます。その後、未返信の PR コメントが残っていればマージせずに止まり、返信用コマンドを案内します。コメント返信が解消されたら自動でマージします。',
     ]);
   });
 });

@@ -15,6 +15,7 @@ import {
   runAgentCheck,
   type RunAgentCheckOptions,
 } from '../src/ralph-loop/agentCheckRunner.service.ts';
+import { buildCommentFixedFollowUp } from '../src/ralph-loop/commentFixedFeedback.service.ts';
 import {
   runCompletionAutomation,
   type RunCompletionAutomationOptions,
@@ -139,6 +140,10 @@ const summarizeResult = (outcome: RalphLoopOutcome): string => {
       }
 
       if (result.reason === 'merge-condition-failed') {
+        if (result.mergeConditionDetails?.kind === 'comment-fixed') {
+          return 'set-ralph-loop requires more work: unresolved PR comments still need replies before merge.';
+        }
+
         const details = lastMeaningfulOutput(result.mergeConditionChecks);
 
         return details === undefined
@@ -164,13 +169,25 @@ const summarizeResult = (outcome: RalphLoopOutcome): string => {
   }
 };
 
-const createFollowUpContent = (outcome: RalphLoopOutcome): string =>
-  [
+const createFollowUpContent = (outcome: RalphLoopOutcome): string => {
+  const content = [
     '[set-ralph-loop]',
     summarizeResult(outcome),
     'Continue working on the task until the configured checks pass.',
     'Do not call set-ralph-loop again; it is already configured for this session and directory.',
-  ].join('\n\n');
+  ];
+
+  if (
+    outcome.result.kind === 'continue' &&
+    outcome.result.reason === 'merge-condition-failed' &&
+    outcome.result.mergeConditionDetails?.kind === 'comment-fixed' &&
+    outcome.result.mergeConditionDetails.pendingComments.length > 0
+  ) {
+    content.splice(2, 0, buildCommentFixedFollowUp(outcome.result.mergeConditionDetails));
+  }
+
+  return content.join('\n\n');
+};
 
 const createAgentCheckOptions = (ctx: ExtensionContext): RunAgentCheckOptions => ({
   onMissingReviewToolCall: (attempt, maxContinuationAttempts, request) => {
@@ -271,9 +288,11 @@ const runConfiguredLoop = async (
             ctx,
           );
         },
-        onMergeConditionStarted: () => {
+        onMergeConditionStarted: (mergeCondition) => {
           notifyProgress(
-            'set-ralph-loop: PR automation passed. waiting for CI and merging automatically when possible...',
+            mergeCondition === 'comment-fixed'
+              ? 'set-ralph-loop: PR automation passed. waiting for CI, then checking unresolved PR comments before merge...'
+              : 'set-ralph-loop: PR automation passed. waiting for CI and merging automatically when possible...',
             ctx,
           );
         },
@@ -400,10 +419,13 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
             'Completion policy that must hold after the static checks pass. pr and draft-pr also trigger pull-request automation after commit cleanliness checks pass.',
         },
       ),
-      mergeCondition: Type.Union([Type.Literal('none'), Type.Literal('ci-passed')], {
-        description:
-          'Optional merge policy. ci-passed waits for GitHub CI on the PR and automatically merges when no failed checks remain.',
-      }),
+      mergeCondition: Type.Union(
+        [Type.Literal('none'), Type.Literal('ci-passed'), Type.Literal('comment-fixed')],
+        {
+          description:
+            'Optional merge policy. ci-passed waits for GitHub CI on the PR and automatically merges when no failed checks remain. comment-fixed also blocks on unresolved PR comments before merging.',
+        },
+      ),
       review: Type.Optional(
         Type.Boolean({
           description: 'Whether an agent-based review check is required before completion.',
