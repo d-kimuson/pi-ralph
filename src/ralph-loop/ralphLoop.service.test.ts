@@ -10,6 +10,7 @@ const CI_ASSERT_HAS_CHECKS_COMMAND =
 const CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND =
   'blocking="$(gh pr checks --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail" or .bucket == "pending" or .bucket == "cancel") | "\\(.name) [\\(.bucket)] \\(.link // "")"\')"; test -z "$blocking" || { printf "%s\\n" "$blocking"; exit 1; }';
 const CI_MERGE_COMMAND = 'gh pr merge --delete-branch --merge';
+const COMMENT_FIXED_INSPECT_COMMAND = 'comment-fixed: inspect unresolved comments';
 
 const createCommandExecutor = (
   sequence: string[],
@@ -986,6 +987,161 @@ describe('runRalphLoop', () => {
       throw new Error('expected continue');
     }
     expect(outcome.result.reason).toBe('merge-condition-failed');
+  });
+
+  test('returns continue when comment-fixed finds unresolved comments after CI passes', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0, stdout: '{"nameWithOwner":"example/repo"}' },
+      { code: 0, stdout: '{"number":123,"author":{"login":"author"}}' },
+      { code: 0, stdout: 'abcdef1234567890\n' },
+      {
+        code: 0,
+        stdout:
+          '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[{"comments":{"nodes":[{"databaseId":10,"url":"https://github.com/example/repo/pull/123#discussion_r10","body":"Please rename this helper.","createdAt":"2026-05-20T10:00:00Z","author":{"login":"reviewer-a"}}]}}]}}}}}',
+      },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'comment-fixed',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
+      'command:gh repo view --json nameWithOwner',
+      'command:gh pr view --json number,author',
+      'command:git rev-parse HEAD',
+      "command:gh api graphql -F owner=example -F name=repo -F number=123 -f query=$'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { comments(first: 100) { nodes { databaseId url body createdAt author { login } } } reviews(first: 100) { nodes { url body submittedAt author { login } } } reviewThreads(first: 100) { nodes { comments(first: 100) { nodes { databaseId url body createdAt author { login } } } } } } } }'",
+    ]);
+    expect(outcome.result.kind).toBe('continue');
+    if (outcome.result.kind !== 'continue') {
+      throw new Error('expected continue');
+    }
+    expect(outcome.result.reason).toBe('merge-condition-failed');
+    expect(outcome.result.mergeConditionDetails).toEqual({
+      kind: 'comment-fixed',
+      headSha: 'abcdef1234567890',
+      pendingComments: [
+        {
+          kind: 'review-thread',
+          authorLogin: 'reviewer-a',
+          url: 'https://github.com/example/repo/pull/123#discussion_r10',
+          body: 'Please rename this helper.',
+          replyCommand:
+            "gh api repos/example/repo/pulls/123/comments/10/replies -X POST -f body=$'Fixed in commit abcdef1234567890.\\n\\n<describe-the-fix>'",
+        },
+      ],
+    });
+    expect(outcome.result.mergeConditionChecks?.at(-1)).toEqual({
+      command: COMMENT_FIXED_INSPECT_COMMAND,
+      code: 1,
+      stdout:
+        '1 pending PR comment thread(s) still need a reply before merge. Latest commit: abcdef1234567890.',
+      stderr: '',
+    });
+  });
+
+  test('merges after comment-fixed finds no unresolved comments', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0, stdout: '{"nameWithOwner":"example/repo"}' },
+      { code: 0, stdout: '{"number":123,"author":{"login":"author"}}' },
+      { code: 0, stdout: 'abcdef1234567890\n' },
+      {
+        code: 0,
+        stdout:
+          '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[{"comments":{"nodes":[{"databaseId":10,"url":"https://github.com/example/repo/pull/123#discussion_r10","body":"Please add a test.","createdAt":"2026-05-20T10:00:00Z","author":{"login":"reviewer-a"}},{"databaseId":11,"url":"https://github.com/example/repo/pull/123#discussion_r11","body":"Added in the latest commit.","createdAt":"2026-05-20T10:05:00Z","author":{"login":"author"}}]}}]}}}}}',
+      },
+      { code: 0 },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'pr',
+        mergeCondition: 'comment-fixed',
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${PR_VERIFY_READY_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
+      'command:gh repo view --json nameWithOwner',
+      'command:gh pr view --json number,author',
+      'command:git rev-parse HEAD',
+      "command:gh api graphql -F owner=example -F name=repo -F number=123 -f query=$'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { comments(first: 100) { nodes { databaseId url body createdAt author { login } } } reviews(first: 100) { nodes { url body submittedAt author { login } } } reviewThreads(first: 100) { nodes { comments(first: 100) { nodes { databaseId url body createdAt author { login } } } } } } } }'",
+      `command:${CI_MERGE_COMMAND}`,
+    ]);
+    expect(outcome.result.kind).toBe('completed');
   });
 
   test('returns continue when no CI checks are reported', async () => {

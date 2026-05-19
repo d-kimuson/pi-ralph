@@ -1,7 +1,9 @@
+import { runCommentFixedCheck } from './commentFixed.service.ts';
+
 export type RalphLoopParams = {
   readonly staticChecks: readonly string[];
   readonly completion: 'only-edit' | 'commit' | 'pr' | 'draft-pr';
-  readonly mergeCondition: 'none' | 'ci-passed';
+  readonly mergeCondition: 'none' | 'ci-passed' | 'comment-fixed';
   readonly review: boolean;
   readonly acceptanceCriteria?: string;
 };
@@ -57,6 +59,20 @@ export type RalphLoopCompletionAutomationResult = {
   readonly outcome: RalphLoopDecision;
 };
 
+export type RalphLoopPendingComment = {
+  readonly kind: 'issue-comment' | 'review' | 'review-thread';
+  readonly authorLogin: string;
+  readonly url: string;
+  readonly body: string;
+  readonly replyCommand: string;
+};
+
+export type RalphLoopMergeConditionDetails = {
+  readonly kind: 'comment-fixed';
+  readonly headSha: string;
+  readonly pendingComments: readonly RalphLoopPendingComment[];
+};
+
 type PendingAgentCheckState = {
   readonly status: 'pending';
 };
@@ -79,6 +95,7 @@ type RalphLoopBaseResult = {
   readonly completionChecks: readonly RalphLoopCommandResult[];
   readonly completionAutomation?: readonly RalphLoopCompletionAutomationResult[];
   readonly mergeConditionChecks?: readonly RalphLoopCommandResult[];
+  readonly mergeConditionDetails?: RalphLoopMergeConditionDetails;
 };
 
 export type RalphLoopResult =
@@ -118,7 +135,7 @@ export type RalphLoopHooks = {
     mode: RalphLoopCompletionAutomationRequest['mode'],
   ) => Promise<void> | void;
   readonly onMergeConditionStarted?: (
-    mergeCondition: Extract<RalphLoopParams['mergeCondition'], 'ci-passed'>,
+    mergeCondition: Exclude<RalphLoopParams['mergeCondition'], 'none'>,
   ) => Promise<void> | void;
 };
 
@@ -224,19 +241,18 @@ const mergeConditionChecksFor = (
     case 'none': {
       return [];
     }
-    case 'ci-passed': {
-      return [
-        CI_WATCH_COMMAND,
-        CI_ASSERT_HAS_CHECKS_COMMAND,
-        CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND,
-        CI_MERGE_COMMAND,
-      ];
+    case 'ci-passed':
+    case 'comment-fixed': {
+      return [CI_WATCH_COMMAND, CI_ASSERT_HAS_CHECKS_COMMAND, CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND];
     }
     default: {
       return assertNever(mergeCondition);
     }
   }
 };
+
+const shouldMergeAfterChecks = (mergeCondition: RalphLoopParams['mergeCondition']): boolean =>
+  mergeCondition !== 'none';
 
 const runChecks = async (
   commands: readonly string[],
@@ -542,11 +558,11 @@ export const runRalphLoop = async (
 
   const mergeConditionCheckCommands = mergeConditionChecksFor(params.mergeCondition);
 
-  if (mergeConditionCheckCommands.length > 0) {
-    await hooks?.onMergeConditionStarted?.('ci-passed');
+  if (mergeConditionCheckCommands.length > 0 && params.mergeCondition !== 'none') {
+    await hooks?.onMergeConditionStarted?.(params.mergeCondition);
   }
 
-  const mergeConditionChecks = await runChecks(mergeConditionCheckCommands, execute);
+  const mergeConditionChecks = [...(await runChecks(mergeConditionCheckCommands, execute))];
   const lastMergeConditionCheck = mergeConditionChecks.at(-1);
 
   if (lastMergeConditionCheck !== undefined && !isSuccessful(lastMergeConditionCheck)) {
@@ -568,6 +584,61 @@ export const runRalphLoop = async (
     };
   }
 
+  let mergeConditionDetails: RalphLoopMergeConditionDetails | undefined;
+
+  if (params.mergeCondition === 'comment-fixed') {
+    const commentFixedOutcome = await runCommentFixedCheck(execute);
+    mergeConditionChecks.push(...commentFixedOutcome.results);
+    mergeConditionDetails = commentFixedOutcome.details;
+
+    const lastCommentFixedCheck = commentFixedOutcome.results.at(-1);
+
+    if (lastCommentFixedCheck !== undefined && !isSuccessful(lastCommentFixedCheck)) {
+      return {
+        state: nextState,
+        result: {
+          kind: 'continue',
+          reason: 'merge-condition-failed',
+          completion: params.completion,
+          mergeCondition: params.mergeCondition,
+          staticChecks,
+          agentChecks,
+          completionChecks,
+          ...(completionAutomationResults.length > 0
+            ? { completionAutomation: completionAutomationResults }
+            : {}),
+          mergeConditionChecks,
+          mergeConditionDetails,
+        },
+      };
+    }
+  }
+
+  if (shouldMergeAfterChecks(params.mergeCondition)) {
+    const mergeCommandResult = await execute(CI_MERGE_COMMAND);
+    mergeConditionChecks.push(mergeCommandResult);
+
+    if (!isSuccessful(mergeCommandResult)) {
+      return {
+        state: nextState,
+        result: {
+          kind: 'continue',
+          reason: 'merge-condition-failed',
+          completion: params.completion,
+          mergeCondition: params.mergeCondition,
+          staticChecks,
+          agentChecks,
+          completionChecks,
+          ...(completionAutomationResults.length > 0
+            ? { completionAutomation: completionAutomationResults }
+            : {}),
+          mergeConditionChecks,
+          ...(mergeConditionDetails === undefined ? {} : { mergeConditionDetails }),
+        },
+      };
+    }
+  }
+
   return {
     state: nextState,
     result: {
@@ -581,6 +652,7 @@ export const runRalphLoop = async (
         ? { completionAutomation: completionAutomationResults }
         : {}),
       ...(mergeConditionCheckCommands.length > 0 ? { mergeConditionChecks } : {}),
+      ...(mergeConditionDetails === undefined ? {} : { mergeConditionDetails }),
     },
   };
 };
