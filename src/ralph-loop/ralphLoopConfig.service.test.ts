@@ -76,8 +76,8 @@ describe('ralphLoopConfig.service', () => {
         review: false,
       }),
     ).toEqual([
-      'completion: pr を設定したので、完了後は set-ralph-loop が自動で PR を作成します。あなたが PR を手動で作成する必要はありませんが、コミットは自身で行ってください。PR を作成するためのブランチは自身で切ってください。',
-      'mergeCondition: comment-fixed を設定したので、PR 作成後はまず ci-passed と同様に CI 完了を待ちます。その後、未返信の PR コメントが残っていればマージせずに止まり、返信用コマンドを案内します。コメント返信が解消されたら自動でマージします。',
+      'completion: pr is set, so set-ralph-loop will create the PR automatically upon completion. You do not need to create the PR manually, but you must commit your changes yourself and create the working branch yourself.',
+      'mergeCondition: comment-fixed is set, so set-ralph-loop will first wait for CI to complete (same as ci-passed), then block merge if any PR comments remain unanswered, providing reply guidance. Once all comments are resolved, it merges automatically.',
     ]);
   });
 });
