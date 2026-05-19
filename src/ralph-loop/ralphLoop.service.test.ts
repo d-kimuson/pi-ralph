@@ -4,11 +4,11 @@ import { createRalphLoopState, runRalphLoop } from './ralphLoop.service.ts';
 
 const PR_VERIFY_URL_COMMAND = 'gh pr view --json url --jq .url';
 const PR_VERIFY_READY_COMMAND = 'test "$(gh pr view --json isDraft --jq .isDraft)" = "false"';
-const CI_WATCH_COMMAND = 'gh pr checks --watch --fail-fast --required || true';
+const CI_WATCH_COMMAND = 'gh pr checks --watch --fail-fast || true';
 const CI_LIST_FAILED_COMMAND =
-  'gh pr checks --required --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail") | "\\(.name) (\\(.state)) \\(.link // "")"\'';
+  'gh pr checks --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail") | "\\(.name) (\\(.state)) \\(.link // "")"\'';
 const CI_ASSERT_NONE_FAILED_COMMAND =
-  'test -z "$(gh pr checks --required --json name,bucket --jq \'.[] | select(.bucket == \\"fail\\") | .name\')"';
+  'test -z "$(gh pr checks --json name,bucket --jq \'.[] | select(.bucket == \\"fail\\") | .name\')"';
 const CI_MERGE_COMMAND =
   'gh pr merge --delete-branch --merge || gh pr merge --delete-branch --auto';
 

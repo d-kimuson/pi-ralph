@@ -354,6 +354,7 @@ const createConfigurationResponseText = (params: RalphLoopParams): string => {
 
   return [
     'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when the task tries to finish.',
+    'From this point on, ralph-loop enters its self-evaluation loop. Do not expect normal back-and-forth with the user; proceed autonomously and make the remaining implementation decisions yourself unless the goal itself becomes unclear or needs to change.',
     ...guidance,
   ].join('\n\n');
 };
@@ -370,6 +371,7 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
       'At the start of a task, call set-ralph-loop once with the static checks and completion policy that define done.',
       'Do not call set-ralph-loop again after it has been configured for the current session and directory.',
       'After configuration, keep working normally; set-ralph-loop will automatically run the configured checks whenever the task tries to finish.',
+      'After configuration, assume ralph-loop will take over the endgame as a self-evaluation loop; proceed autonomously instead of expecting further user back-and-forth.',
       'Configuring set-ralph-loop does not complete the task and does not ask you to call it again later.',
       'If set-ralph-loop reports a failure, continue working on the task instead of trying to configure it again.',
       'When completion is pr or draft-pr, commit your changes yourself and create the working branch yourself; set-ralph-loop will handle the PR automation later.',
