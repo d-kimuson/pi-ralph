@@ -145,3 +145,5 @@ vite.config.ts.timestamp-*
 .env
 
 progress.md
+
+.pi/agent/ralph-loop/default-options.json
