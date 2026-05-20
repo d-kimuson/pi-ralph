@@ -74,7 +74,18 @@ After configuration, the checks run automatically when the task tries to finish.
 pnpm typecheck    # TypeScript type checking
 pnpm test         # Run tests
 pnpm lint         # Lint & format check
+pnpm gatecheck check  # Run all commit gates
 ```
+
+## Release
+
+See [docs/release.md](docs/release.md) for the complete release process.
+
+```bash
+pnpm release      # Interactive release (bump, commit, tag, push)
+```
+
+The release uses npm trusted publishing (provenance) via GitHub Actions.
 
 ## License
 

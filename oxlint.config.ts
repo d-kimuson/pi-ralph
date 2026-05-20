@@ -237,6 +237,16 @@ export default defineConfig({
         'jest/valid-title': 'error', // test/describe のタイトルが空文字でないことを検証
       },
     },
+    {
+      files: ['scripts/**'],
+      rules: {
+        'typescript/no-unsafe-argument': 'off',
+        'typescript/no-unsafe-assignment': 'off',
+        'typescript/no-unsafe-call': 'off',
+        'typescript/no-unsafe-member-access': 'off',
+        'typescript/no-unsafe-return': 'off',
+      },
+    },
   ],
   settings: {
     jsdoc: {

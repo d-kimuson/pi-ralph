@@ -6,7 +6,19 @@
     "pi-package"
   ],
   "license": "MIT",
+  "files": [
+    "extensions",
+    "prompts",
+    "skills",
+    "src",
+    "themes",
+    "LICENSE",
+    "README.md"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsgo -p . --noEmit",
     "test": "vitest run",
@@ -16,18 +28,24 @@
     "lint:oxfmt": "pnpm fix:oxfmt --check",
     "fix": "run-p fix:*",
     "fix:oxlint": "pnpm lint:oxlint --fix",
-    "fix:oxfmt": "oxfmt --ignore-path .gitignore --no-error-on-unmatched-pattern"
+    "fix:oxfmt": "oxfmt --ignore-path .gitignore --no-error-on-unmatched-pattern",
+    "release": "node scripts/release.ts",
+    "build": "echo No build step required for pi package"
   },
   "devDependencies": {
     "@tsconfig/strictest": "2.0.8",
     "@types/node": "25.9.0",
     "@typescript/native-preview": "7.0.0-dev.20260518.1",
+    "changelogithub": "14.0.0",
+    "clean-pkg-json": "1.4.2",
     "gatecheck": "0.0.1",
+    "inquirer": "13.4.2",
     "lefthook": "2.1.6",
     "npm-run-all2": "8.0.4",
     "oxfmt": "0.50.0",
     "oxlint": "1.65.0",
     "oxlint-tsgolint": "0.23.0",
+    "tsdown": "0.22.0",
     "vitest": "4.1.6"
   },
   "peerDependencies": {
