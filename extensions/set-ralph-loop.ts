@@ -225,6 +225,85 @@ const ensureGitHubCliAvailable = async (
   }
 };
 
+const getCurrentBranch = async (
+  pi: ExtensionAPI,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string | undefined> => {
+  const result = await pi.exec('bash', ['-lc', 'git branch --show-current'], {
+    cwd,
+    signal,
+    timeout: TOOL_TIMEOUT_MS,
+  });
+  const branch = result.stdout.trim();
+
+  return result.code === 0 && branch !== '' ? branch : undefined;
+};
+
+const getDefaultBranch = async (
+  pi: ExtensionAPI,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string | undefined> => {
+  const gitResult = await pi.exec(
+    'bash',
+    ['-lc', "git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##'"],
+    {
+      cwd,
+      signal,
+      timeout: TOOL_TIMEOUT_MS,
+    },
+  );
+  const gitBranch = gitResult.stdout.trim();
+
+  if (gitResult.code === 0 && gitBranch !== '') {
+    return gitBranch;
+  }
+
+  const ghResult = await pi.exec(
+    'bash',
+    ['-lc', 'gh repo view --json defaultBranchRef --jq .defaultBranchRef.name'],
+    {
+      cwd,
+      signal,
+      timeout: TOOL_TIMEOUT_MS,
+    },
+  );
+  const ghBranch = ghResult.stdout.trim();
+
+  return ghResult.code === 0 && ghBranch !== '' ? ghBranch : undefined;
+};
+
+const ensureNotOnDefaultBranchForPullRequestCompletion = async (
+  pi: ExtensionAPI,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  params: RalphLoopParams,
+): Promise<void> => {
+  if (!isPullRequestCompletion(params.completion)) {
+    return;
+  }
+
+  const currentBranch = await getCurrentBranch(pi, cwd, signal);
+  const defaultBranch = await getDefaultBranch(pi, cwd, signal);
+
+  if (
+    currentBranch === undefined ||
+    defaultBranch === undefined ||
+    currentBranch !== defaultBranch
+  ) {
+    return;
+  }
+
+  throw new Error(
+    [
+      `completion=${params.completion} is configured, but the current branch is the default branch (${defaultBranch}).`,
+      'ralph-package does not create or switch working branches for you.',
+      'Before starting PR-oriented ralph-loop work, create and switch to a local feature branch yourself, then call set-ralph-loop again.',
+    ].join(' '),
+  );
+};
+
 const runConfiguredLoop = async (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -396,14 +475,11 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
     promptSnippet:
       'Use set-ralph-loop autonomously only for lightweight verification (static checks, completion=edit-only, autofix=none, mergeCondition=none). Use PR/autofix/merge modes only when explicitly requested or provided by a ralph command.',
     promptGuidelines: [
-      'If the user did not explicitly request PR creation, delegation, CI/comment autofix, or merge automation, configure only a lightweight verification gate: default staticChecks, completion=edit-only, autofix=none, mergeCondition=none.',
-      'Do not choose completion=pr, completion=draft-pr, autofix=ci, autofix=comment, mergeCondition=fix-completed, or mergeCondition=approved unless explicitly requested or supplied by a ralph command.',
+      'Autonomous use must be lightweight only: configured staticChecks, completion=edit-only, autofix=none, mergeCondition=none.',
+      'Use PR/autofix/merge modes only when explicitly requested by the user or supplied by a ralph command.',
       'Do not call set-ralph-loop again after it has been configured for the current session and directory.',
-      'After configuration, keep working normally; set-ralph-loop will automatically run the configured checks whenever the task tries to finish.',
-      'When you believe the task is done, do not wait, do not run sleep, and do not run unrelated commands just to check whether ralph-loop starts. Simply stop so the current turn can end and the agent_end hook can fire.',
-      'Configuring set-ralph-loop does not complete the task and does not ask you to call it again later.',
-      'If set-ralph-loop reports a failure, continue working on the task instead of trying to configure it again.',
-      'When completion is pr or draft-pr, commit your changes yourself and create the working branch yourself; set-ralph-loop will handle the PR automation later.',
+      'After configuration, finish normal task work; when done, stop so agent_end can run ralph-loop.',
+      'If ralph-loop reports a failure, continue fixing the task instead of reconfiguring the loop.',
     ],
     executionMode: 'sequential',
     parameters: Type.Object({
@@ -457,6 +533,13 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
       if (requiresGitHubCli(normalizedParams)) {
         await ensureGitHubCliAvailable(pi, ctx.cwd, ctx.signal);
       }
+
+      await ensureNotOnDefaultBranchForPullRequestCompletion(
+        pi,
+        ctx.cwd,
+        ctx.signal,
+        normalizedParams,
+      );
 
       const sessionKey = createSessionKey(ctx.cwd, ctx.sessionManager.getSessionId());
       const configured = createActiveRalphLoop(

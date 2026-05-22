@@ -58,13 +58,13 @@ export const buildConfigurationGuidance = (params: RalphLoopParams): readonly st
 
   if (params.completion === 'pr') {
     guidance.push(
-      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must commit your changes yourself and create the working branch yourself.',
+      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must create and switch to a non-default working branch yourself before starting; ralph-package does not create branches for you.',
     );
   }
 
   if (params.completion === 'draft-pr') {
     guidance.push(
-      'completion: draft-pr is set, so set-ralph-loop will create or update a draft PR after commit cleanliness checks pass. You must commit your changes yourself and create the working branch yourself.',
+      'completion: draft-pr is set, so set-ralph-loop will create or update a draft PR after commit cleanliness checks pass. You must create and switch to a non-default working branch yourself before starting; ralph-package does not create branches for you.',
     );
   }
 

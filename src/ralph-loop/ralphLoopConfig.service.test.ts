@@ -86,7 +86,7 @@ describe('ralphLoopConfig.service', () => {
         review: false,
       }),
     ).toEqual([
-      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must commit your changes yourself and create the working branch yourself.',
+      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must create and switch to a non-default working branch yourself before starting; ralph-package does not create branches for you.',
       'autofix: comment is set, so set-ralph-loop will wait for PR CI, then check unresolved PR comments and keep the task open for the agent to address them. It will not merge by itself unless mergeCondition requests it.',
       'mergeCondition: fix-completed is set, so set-ralph-loop will merge after the configured autofix checks pass.',
     ]);
