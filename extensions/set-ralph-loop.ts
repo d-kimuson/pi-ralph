@@ -407,25 +407,18 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
           description: "Static checks that define the task's done criteria.",
         },
       ),
-      completion: Type.Union(
-        [
-          Type.Literal('only-edit'),
-          Type.Literal('commit'),
-          Type.Literal('pr'),
-          Type.Literal('draft-pr'),
-        ],
-        {
-          description:
-            'Completion policy that must hold after the static checks pass. pr and draft-pr also trigger pull-request automation after commit cleanliness checks pass.',
-        },
-      ),
-      mergeCondition: Type.Union(
-        [Type.Literal('none'), Type.Literal('ci-passed'), Type.Literal('comment-fixed')],
-        {
-          description:
-            'Optional merge policy. ci-passed waits for GitHub CI on the PR and automatically merges when no failed checks remain. comment-fixed also blocks on unresolved PR comments before merging.',
-        },
-      ),
+      completion: Type.Unsafe<RalphLoopParams['completion']>({
+        type: 'string',
+        enum: ['only-edit', 'commit', 'pr', 'draft-pr'],
+        description:
+          'Completion policy. Must be exactly one of: only-edit, commit, pr, draft-pr. Do not use local, response, or other output-location words. pr and draft-pr also trigger pull-request automation after commit cleanliness checks pass.',
+      }),
+      mergeCondition: Type.Unsafe<RalphLoopParams['mergeCondition']>({
+        type: 'string',
+        enum: ['none', 'ci-passed', 'comment-fixed'],
+        description:
+          'Optional merge policy. Must be exactly one of: none, ci-passed, comment-fixed. ci-passed waits for GitHub CI on the PR and automatically merges when no failed checks remain. comment-fixed also blocks on unresolved PR comments before merging.',
+      }),
       review: Type.Optional(
         Type.Boolean({
           description: 'Whether an agent-based review check is required before completion.',
