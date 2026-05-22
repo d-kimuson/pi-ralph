@@ -288,11 +288,19 @@ const runConfiguredLoop = async (
             ctx,
           );
         },
+        onAutofixStarted: (autofix) => {
+          notifyProgress(
+            autofix === 'comment'
+              ? 'set-ralph-loop: PR automation passed. waiting for CI, then checking unresolved PR comments...'
+              : 'set-ralph-loop: PR automation passed. waiting for CI...',
+            ctx,
+          );
+        },
         onMergeConditionStarted: (mergeCondition) => {
           notifyProgress(
-            mergeCondition === 'comment-fixed'
-              ? 'set-ralph-loop: PR automation passed. waiting for CI, then checking unresolved PR comments before merge...'
-              : 'set-ralph-loop: PR automation passed. waiting for CI and merging automatically when possible...',
+            mergeCondition === 'approved'
+              ? 'set-ralph-loop: autofix checks passed. waiting until PR approval before merge...'
+              : 'set-ralph-loop: autofix checks passed. merging automatically...',
             ctx,
           );
         },
@@ -374,7 +382,7 @@ const createConfigurationResponseText = (params: RalphLoopParams): string => {
   return [
     'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when you are done and stop taking further actions.',
     'Trigger condition: when you believe the task is complete, do not wait, do not run sleep, and do not run unrelated confirmation commands just to see whether ralph-loop fires. Simply stop and let the current turn end; ralph-loop will start automatically from that agent_end.',
-    'From this point on, ralph-loop enters its self-evaluation loop. Do not expect normal back-and-forth with the user; proceed autonomously and make the remaining implementation decisions yourself unless the goal itself becomes unclear or needs to change.',
+    'If this was configured autonomously without an explicit PR/delegation/merge request, treat it as a lightweight verification gate only: use static checks with completion=edit-only, autofix=none, and mergeCondition=none.',
     ...guidance,
   ].join('\n\n');
 };
@@ -384,15 +392,15 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
     name: 'set-ralph-loop',
     label: 'Set Ralph Loop',
     description:
-      "Set the task's completion conditions before focused work starts. After that, set-ralph-loop automatically runs the configured static checks, optional agent checks, completion automation, and merge policy whenever the task tries to finish, and it keeps the task open until they pass.",
+      'Configure ralph-loop completion checks for the current task. Autonomous use is allowed only as a lightweight verification gate: use the configured static checks with completion=edit-only, autofix=none, and mergeCondition=none unless the user explicitly asks for PR/delegation/merge automation or invokes a ralph command.',
     promptSnippet:
-      'Call set-ralph-loop once at task start to configure done criteria; after that, when you believe the task is done, stop taking actions and let agent_end trigger the checks automatically.',
+      'Use set-ralph-loop autonomously only for lightweight verification (static checks, completion=edit-only, autofix=none, mergeCondition=none). Use PR/autofix/merge modes only when explicitly requested or provided by a ralph command.',
     promptGuidelines: [
-      'At the start of a task, call set-ralph-loop once with the static checks and completion policy that define done.',
+      'If the user did not explicitly request PR creation, delegation, CI/comment autofix, or merge automation, configure only a lightweight verification gate: default staticChecks, completion=edit-only, autofix=none, mergeCondition=none.',
+      'Do not choose completion=pr, completion=draft-pr, autofix=ci, autofix=comment, mergeCondition=fix-completed, or mergeCondition=approved unless explicitly requested or supplied by a ralph command.',
       'Do not call set-ralph-loop again after it has been configured for the current session and directory.',
       'After configuration, keep working normally; set-ralph-loop will automatically run the configured checks whenever the task tries to finish.',
       'When you believe the task is done, do not wait, do not run sleep, and do not run unrelated commands just to check whether ralph-loop starts. Simply stop so the current turn can end and the agent_end hook can fire.',
-      'After configuration, assume ralph-loop will take over the endgame as a self-evaluation loop; proceed autonomously instead of expecting further user back-and-forth.',
       'Configuring set-ralph-loop does not complete the task and does not ask you to call it again later.',
       'If set-ralph-loop reports a failure, continue working on the task instead of trying to configure it again.',
       'When completion is pr or draft-pr, commit your changes yourself and create the working branch yourself; set-ralph-loop will handle the PR automation later.',
@@ -409,15 +417,21 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
       ),
       completion: Type.Unsafe<RalphLoopParams['completion']>({
         type: 'string',
-        enum: ['only-edit', 'commit', 'pr', 'draft-pr'],
+        enum: ['edit-only', 'draft-pr', 'pr'],
         description:
-          'Completion policy. Must be exactly one of: only-edit, commit, pr, draft-pr. Do not use local, response, or other output-location words. pr and draft-pr also trigger pull-request automation after commit cleanliness checks pass.',
+          'Completion policy. Must be exactly one of: edit-only, draft-pr, pr. Do not use local, response, commit, or only-edit. Autonomous/default use should be edit-only.',
+      }),
+      autofix: Type.Unsafe<RalphLoopParams['autofix']>({
+        type: 'string',
+        enum: ['none', 'ci', 'comment'],
+        description:
+          'Autofix scope. Must be exactly one of: none, ci, comment. Use none unless CI/comment follow-up was explicitly requested or supplied by a ralph command.',
       }),
       mergeCondition: Type.Unsafe<RalphLoopParams['mergeCondition']>({
         type: 'string',
-        enum: ['none', 'ci-passed', 'comment-fixed'],
+        enum: ['none', 'fix-completed', 'approved'],
         description:
-          'Optional merge policy. Must be exactly one of: none, ci-passed, comment-fixed. ci-passed waits for GitHub CI on the PR and automatically merges when no failed checks remain. comment-fixed also blocks on unresolved PR comments before merging.',
+          'Optional merge policy. Must be exactly one of: none, fix-completed, approved. Use none unless merge automation was explicitly requested or supplied by a ralph command.',
       }),
       review: Type.Optional(
         Type.Boolean({

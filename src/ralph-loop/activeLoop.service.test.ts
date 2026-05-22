@@ -11,7 +11,8 @@ import { createRalphLoopState } from './ralphLoop.service.ts';
 describe('activeLoop.service', () => {
   const params = {
     staticChecks: ['pnpm gatecheck check'],
-    completion: 'commit' as const,
+    completion: 'edit-only' as const,
+    autofix: 'none' as const,
     mergeCondition: 'none' as const,
     review: true,
     acceptanceCriteria: 'all requirements are met',
@@ -67,7 +68,8 @@ describe('activeLoop.service', () => {
       result: {
         kind: 'continue',
         reason: 'static-check-failed',
-        completion: 'commit',
+        completion: 'edit-only',
+        autofix: 'none',
         mergeCondition: 'none',
         staticChecks: [],
         agentChecks: [],
@@ -79,7 +81,8 @@ describe('activeLoop.service', () => {
       state: createRalphLoopState(),
       result: {
         kind: 'completed',
-        completion: 'commit',
+        completion: 'edit-only',
+        autofix: 'none',
         mergeCondition: 'none',
         staticChecks: [],
         agentChecks: [],

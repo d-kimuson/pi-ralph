@@ -1,4 +1,5 @@
 ## Review
+
 - Correct: npm trusted publishing / provenance の前提は満たしています。`.github/workflows/release.yaml:12-14` の publish job permissions は `contents: read` と `id-token: write` のみで、`pnpm publish --provenance` が必要とする GitHub Actions OIDC トークン権限を明示しています。publish は tag push 時の GitHub Actions 上でのみ実行され、ローカル CI から npm token で publish する構成ではありません（`.github/workflows/release.yaml:3-6`, `.github/workflows/release.yaml:32-33`）。
 - Correct: npm token / secret の露出は見当たりません。publish step は `NODE_AUTH_TOKEN` や npm token secret を渡しておらず、trusted publishing(OIDC)前提です（`.github/workflows/release.yaml:32-33`）。release notes 側は GitHub Release 作成用に `GITHUB_TOKEN` のみを `changelogithub` に渡しています（`.github/workflows/release.yaml:50-53`）。
 - Correct: workflow permissions は概ね最小です。publish job は npm provenance に必要な `id-token: write` と checkout 用の `contents: read` のみ（`.github/workflows/release.yaml:12-14`）。release-notes job は draft release 作成のため `contents: write` のみ（`.github/workflows/release.yaml:39-40`）。

@@ -6,8 +6,8 @@ export const isPullRequestCompletion = (
 
 export const requiresGitHubCli = (params: RalphLoopParams): boolean =>
   isPullRequestCompletion(params.completion) ||
-  params.mergeCondition === 'ci-passed' ||
-  params.mergeCondition === 'comment-fixed';
+  params.autofix !== 'none' ||
+  params.mergeCondition !== 'none';
 
 export const validateRalphLoopParams = (
   params: RalphLoopParams,
@@ -20,19 +20,26 @@ export const validateRalphLoopParams = (
       readonly message: string;
     } => {
   if (!isPullRequestCompletion(params.completion)) {
-    if (params.mergeCondition === 'ci-passed') {
+    if (params.autofix !== 'none') {
       return {
         kind: 'invalid',
-        message: 'mergeCondition=ci-passed requires completion=pr or completion=draft-pr.',
+        message: 'autofix requires completion=pr or completion=draft-pr.',
       };
     }
 
-    if (params.mergeCondition === 'comment-fixed') {
+    if (params.mergeCondition !== 'none') {
       return {
         kind: 'invalid',
-        message: 'mergeCondition=comment-fixed requires completion=pr or completion=draft-pr.',
+        message: 'mergeCondition requires completion=pr or completion=draft-pr.',
       };
     }
+  }
+
+  if (params.mergeCondition !== 'none' && params.autofix === 'none') {
+    return {
+      kind: 'invalid',
+      message: 'mergeCondition requires autofix=ci or autofix=comment.',
+    };
   }
 
   return {
@@ -43,27 +50,45 @@ export const validateRalphLoopParams = (
 export const buildConfigurationGuidance = (params: RalphLoopParams): readonly string[] => {
   const guidance: string[] = [];
 
+  if (params.completion === 'edit-only') {
+    guidance.push(
+      'completion: edit-only is set, so set-ralph-loop is only a lightweight verification gate. Do not commit, create a PR, or merge unless the user separately asks for it.',
+    );
+  }
+
   if (params.completion === 'pr') {
     guidance.push(
-      'completion: pr is set, so set-ralph-loop will create the PR automatically upon completion. You do not need to create the PR manually, but you must commit your changes yourself and create the working branch yourself.',
+      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must commit your changes yourself and create the working branch yourself.',
     );
   }
 
   if (params.completion === 'draft-pr') {
     guidance.push(
-      'completion: draft-pr is set, so set-ralph-loop will create the Draft PR automatically upon completion. You do not need to create the Draft PR manually, but you must commit your changes yourself and create the working branch yourself.',
+      'completion: draft-pr is set, so set-ralph-loop will create or update a draft PR after commit cleanliness checks pass. You must commit your changes yourself and create the working branch yourself.',
     );
   }
 
-  if (params.mergeCondition === 'ci-passed') {
+  if (params.autofix === 'ci') {
     guidance.push(
-      'mergeCondition: ci-passed is set, so set-ralph-loop will wait for CI to complete using gh after PR creation and merge automatically if no checks fail. If CI fails, the task stays open and the work loop resumes automatically.',
+      'autofix: ci is set, so set-ralph-loop will wait for PR CI and keep the task open for the agent to fix failed or pending checks. It will not merge by itself unless mergeCondition requests it.',
     );
   }
 
-  if (params.mergeCondition === 'comment-fixed') {
+  if (params.autofix === 'comment') {
     guidance.push(
-      'mergeCondition: comment-fixed is set, so set-ralph-loop will first wait for CI to complete (same as ci-passed), then block merge if any PR comments remain unanswered, providing reply guidance. Once all comments are resolved, it merges automatically.',
+      'autofix: comment is set, so set-ralph-loop will wait for PR CI, then check unresolved PR comments and keep the task open for the agent to address them. It will not merge by itself unless mergeCondition requests it.',
+    );
+  }
+
+  if (params.mergeCondition === 'fix-completed') {
+    guidance.push(
+      'mergeCondition: fix-completed is set, so set-ralph-loop will merge after the configured autofix checks pass.',
+    );
+  }
+
+  if (params.mergeCondition === 'approved') {
+    guidance.push(
+      'mergeCondition: approved is set, so set-ralph-loop will wait until GitHub reports the PR review decision as APPROVED after the configured autofix checks pass, then merge.',
     );
   }
 

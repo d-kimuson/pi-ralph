@@ -7,22 +7,34 @@ import path from 'node:path';
 // Types
 // ---------------------------------------------------------------------------
 
-type RalphLoopCompletion = 'only-edit' | 'commit' | 'pr' | 'draft-pr';
-type RalphLoopMergeCondition = 'none' | 'ci-passed' | 'comment-fixed';
+type RalphLoopCompletion = 'edit-only' | 'draft-pr' | 'pr';
+type RalphLoopAutofix = 'none' | 'ci' | 'comment';
+type RalphLoopMergeCondition = 'none' | 'fix-completed' | 'approved';
 
-type RalphLoopOptions = {
+type RalphLoopDefaults = {
   readonly staticChecks: readonly string[];
+};
+
+type RalphLoopOptions = RalphLoopDefaults & {
   readonly completion: RalphLoopCompletion;
+  readonly autofix: RalphLoopAutofix;
   readonly mergeCondition: RalphLoopMergeCondition;
   readonly review: boolean;
+  readonly qa: boolean;
+  readonly acceptanceCriteria?: string;
 };
 
-const DEFAULT_OPTIONS: RalphLoopOptions = {
+const DEFAULT_OPTIONS: RalphLoopDefaults = {
   staticChecks: [],
-  completion: 'commit',
+};
+
+const SAFE_LOW_LEVEL_OPTIONS = {
+  completion: 'edit-only',
+  autofix: 'none',
   mergeCondition: 'none',
   review: false,
-};
+  qa: false,
+} as const satisfies Omit<RalphLoopOptions, 'staticChecks' | 'acceptanceCriteria'>;
 
 // ---------------------------------------------------------------------------
 // Default-options file helpers
@@ -32,26 +44,32 @@ const getConfigDir = (cwd: string): string => path.join(cwd, '.pi', 'agent', 'ra
 
 const getConfigFile = (cwd: string): string => path.join(getConfigDir(cwd), 'default-options.json');
 
-const loadDefaultOptions = (cwd: string): RalphLoopOptions => {
+const readStringArray = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item) => typeof item === 'string');
+};
+
+const loadDefaultOptions = (cwd: string): RalphLoopDefaults => {
   const file = getConfigFile(cwd);
   if (!existsSync(file)) {
     return { ...DEFAULT_OPTIONS };
   }
+
   try {
     // oxlint-disable-next-line typescript-eslint/no-unsafe-assignment
     const parsed: Record<string, unknown> = JSON.parse(readFileSync(file, 'utf-8'));
     return {
-      staticChecks: Array.isArray(parsed['staticChecks']) ? parsed['staticChecks'] : [],
-      completion: validateCompletion(parsed['completion']),
-      mergeCondition: validateMergeCondition(parsed['mergeCondition']),
-      review: typeof parsed['review'] === 'boolean' ? parsed['review'] : false,
+      staticChecks: readStringArray(parsed['staticChecks']),
     };
   } catch {
     return { ...DEFAULT_OPTIONS };
   }
 };
 
-const saveDefaultOptions = (cwd: string, options: RalphLoopOptions): void => {
+const saveDefaultOptions = (cwd: string, options: RalphLoopDefaults): void => {
   const dir = getConfigDir(cwd);
   mkdirSync(dir, { recursive: true });
   writeFileSync(getConfigFile(cwd), JSON.stringify(options, null, 2) + '\n', 'utf-8');
@@ -61,70 +79,49 @@ const saveDefaultOptions = (cwd: string, options: RalphLoopOptions): void => {
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-const COMPLETION_VALUES: readonly RalphLoopCompletion[] = ['only-edit', 'commit', 'pr', 'draft-pr'];
-
+const COMPLETION_VALUES: readonly RalphLoopCompletion[] = ['edit-only', 'draft-pr', 'pr'];
+const AUTOFIX_VALUES: readonly RalphLoopAutofix[] = ['none', 'ci', 'comment'];
 const MERGE_CONDITION_VALUES: readonly RalphLoopMergeCondition[] = [
   'none',
-  'ci-passed',
-  'comment-fixed',
+  'fix-completed',
+  'approved',
 ];
 
 const isValidCompletion = (value: unknown): value is RalphLoopCompletion =>
   typeof value === 'string' && (COMPLETION_VALUES as readonly string[]).includes(value);
 
-const validateCompletion = (value: unknown): RalphLoopCompletion => {
-  if (isValidCompletion(value)) {
-    return value;
-  }
-  return 'commit';
-};
+const isValidAutofix = (value: unknown): value is RalphLoopAutofix =>
+  typeof value === 'string' && (AUTOFIX_VALUES as readonly string[]).includes(value);
 
 const isValidMergeCondition = (value: unknown): value is RalphLoopMergeCondition =>
   typeof value === 'string' && (MERGE_CONDITION_VALUES as readonly string[]).includes(value);
-
-const validateMergeCondition = (value: unknown): RalphLoopMergeCondition => {
-  if (isValidMergeCondition(value)) {
-    return value;
-  }
-  return 'none';
-};
-
-// ---------------------------------------------------------------------------
-// Option description labels
-// ---------------------------------------------------------------------------
-
-const COMPLETION_LABELS: Record<RalphLoopCompletion, string> = {
-  'only-edit': 'Only edit (no commit, no PR)',
-  commit: 'Commit changes when done',
-  pr: 'Create a full PR',
-  'draft-pr': 'Create a draft PR',
-};
-
-const MERGE_LABELS: Record<RalphLoopMergeCondition, string> = {
-  none: 'No merge automation',
-  'ci-passed': 'Auto-merge when CI passes',
-  'comment-fixed': 'Wait for CI + resolve comments, then auto-merge',
-};
 
 // ---------------------------------------------------------------------------
 // CLI argument parser for /ralph-loop
 // ---------------------------------------------------------------------------
 
 type ParsedArgs = {
-  staticChecks: string[];
-  completion: RalphLoopCompletion | undefined;
-  mergeCondition: RalphLoopMergeCondition | undefined;
-  review: boolean;
-  acceptanceCriteria: string | undefined;
-  requirement: string;
+  readonly staticChecks: readonly string[];
+  readonly completion: RalphLoopCompletion | undefined;
+  readonly autofix: RalphLoopAutofix | undefined;
+  readonly mergeCondition: RalphLoopMergeCondition | undefined;
+  readonly review: boolean;
+  readonly qa: boolean;
+  readonly acceptanceCriteria: string | undefined;
+  readonly requirement: string;
 };
+
+const readNextToken = (tokens: readonly string[], index: number): string | undefined =>
+  tokens[index + 1];
 
 const parseRalphLoopArgs = (args: string): ParsedArgs => {
   const tokens = tokenize(args);
   const staticChecks: string[] = [];
   let completion: RalphLoopCompletion | undefined;
+  let autofix: RalphLoopAutofix | undefined;
   let mergeCondition: RalphLoopMergeCondition | undefined;
   let review = false;
+  let qa = false;
   let acceptanceCriteria: string | undefined;
   const positional: string[] = [];
 
@@ -137,49 +134,86 @@ const parseRalphLoopArgs = (args: string): ParsedArgs => {
       continue;
     }
 
-    if (token === '--draft-pr') {
+    if (token === '--edit-only' || token === '--only-edit' || token === '--commit') {
+      completion = 'edit-only';
+    } else if (token === '--draft-pr') {
       completion = 'draft-pr';
     } else if (token === '--pr') {
       completion = 'pr';
-    } else if (token === '--commit') {
-      completion = 'commit';
-    } else if (token === '--only-edit') {
-      completion = 'only-edit';
     } else if (token === '--review') {
       review = true;
+    } else if (token === '--qa') {
+      qa = true;
     } else if (token === '--ci-passed') {
-      mergeCondition = 'ci-passed';
+      autofix = 'ci';
+      mergeCondition = 'fix-completed';
     } else if (token === '--comment-fixed') {
-      mergeCondition = 'comment-fixed';
+      autofix = 'comment';
+      mergeCondition = 'fix-completed';
     } else if (token === '--no-merge') {
       mergeCondition = 'none';
+    } else if (token === '--autofix') {
+      const value = readNextToken(tokens, idx);
+      if (isValidAutofix(value)) {
+        autofix = value;
+        idx++;
+      }
+    } else if (token.startsWith('--autofix=')) {
+      const value = token.slice('--autofix='.length);
+      if (isValidAutofix(value)) {
+        autofix = value;
+      }
+    } else if (token === '--merge') {
+      const value = readNextToken(tokens, idx);
+      if (isValidMergeCondition(value)) {
+        mergeCondition = value;
+        idx++;
+      }
+    } else if (token.startsWith('--merge=')) {
+      const value = token.slice('--merge='.length);
+      if (isValidMergeCondition(value)) {
+        mergeCondition = value;
+      }
+    } else if (token === '--completion') {
+      const value = readNextToken(tokens, idx);
+      if (isValidCompletion(value)) {
+        completion = value;
+        idx++;
+      }
+    } else if (token.startsWith('--completion=')) {
+      const value = token.slice('--completion='.length);
+      if (isValidCompletion(value)) {
+        completion = value;
+      }
     } else if (token === '--static-check' || token === '-c') {
-      // Consume the next token as the command
-      idx++;
-      const nextArg: string | undefined = tokens[idx];
+      const nextArg = readNextToken(tokens, idx);
       if (nextArg !== undefined) {
         staticChecks.push(nextArg);
-      }
-    } else if (token === '--acceptance' || token === '--ac') {
-      idx++;
-      const acToken: string | undefined = tokens[idx];
-      if (acToken !== undefined) {
-        acceptanceCriteria = acToken;
+        idx++;
       }
     } else if (token.startsWith('--static-check=')) {
-      const checkValue: string = token.slice('--static-check='.length);
+      const checkValue = token.slice('--static-check='.length);
       if (checkValue !== '') {
         staticChecks.push(checkValue);
       }
+    } else if (token === '--acceptance' || token === '--ac') {
+      const acToken = readNextToken(tokens, idx);
+      if (acToken !== undefined) {
+        acceptanceCriteria = acToken;
+        qa = true;
+        idx++;
+      }
     } else if (token.startsWith('--acceptance=')) {
-      const acValue: string = token.slice('--acceptance='.length);
+      const acValue = token.slice('--acceptance='.length);
       if (acValue !== '') {
         acceptanceCriteria = acValue;
+        qa = true;
       }
     } else if (token.startsWith('--ac=')) {
-      const acValue: string = token.slice('--ac='.length);
+      const acValue = token.slice('--ac='.length);
       if (acValue !== '') {
         acceptanceCriteria = acValue;
+        qa = true;
       }
     } else {
       positional.push(token);
@@ -191,20 +225,13 @@ const parseRalphLoopArgs = (args: string): ParsedArgs => {
   return {
     staticChecks,
     completion,
+    autofix,
     mergeCondition,
     review,
+    qa,
     acceptanceCriteria,
     requirement: positional.join(' '),
   };
-};
-
-// ---------------------------------------------------------------------------
-// Select value parsing (select returns "value — label" strings)
-// ---------------------------------------------------------------------------
-
-const parseSelectValue = (selected: string): string => {
-  const dashIndex = selected.indexOf(' — ');
-  return dashIndex >= 0 ? selected.slice(0, dashIndex) : selected;
 };
 
 // ---------------------------------------------------------------------------
@@ -247,52 +274,30 @@ const tokenize = (input: string): string[] => {
 };
 
 // ---------------------------------------------------------------------------
-// Merging logic
+// Message helpers
 // ---------------------------------------------------------------------------
 
-const mergeWithDefaults = (
-  defaults: RalphLoopOptions,
-  parsed: ParsedArgs,
+const buildAcceptanceCriteria = (
+  qa: boolean,
   requirement: string,
-): {
-  readonly params: {
-    readonly staticChecks: readonly string[];
-    readonly completion: RalphLoopCompletion;
-    readonly mergeCondition: RalphLoopMergeCondition;
-    readonly review: boolean;
-    readonly acceptanceCriteria?: string;
-  };
-  readonly requirement: string;
-} => {
-  const staticChecks = parsed.staticChecks.length > 0 ? parsed.staticChecks : defaults.staticChecks;
-  const completion = parsed.completion ?? defaults.completion;
-  const mergeCondition = parsed.mergeCondition ?? defaults.mergeCondition;
+  explicitAcceptanceCriteria: string | undefined,
+): string | undefined => {
+  if (explicitAcceptanceCriteria !== undefined) {
+    return explicitAcceptanceCriteria;
+  }
 
-  // If acceptance criteria is explicitly provided via CLI, use it.
-  // Otherwise, if a requirement text is present, use that.
-  const acceptanceCriteria =
-    parsed.acceptanceCriteria ?? (requirement.trim() !== '' ? requirement : undefined);
+  if (!qa) {
+    return undefined;
+  }
 
-  return {
-    params: {
-      staticChecks,
-      completion,
-      mergeCondition,
-      review: parsed.review || defaults.review,
-      acceptanceCriteria,
-    },
-    requirement,
-  };
+  return requirement.trim() === ''
+    ? 'Verify that the requested task is complete and user-visible behavior is acceptable.'
+    : requirement;
 };
-
-// ---------------------------------------------------------------------------
-// Build the message that wraps set-ralph-loop
-// ---------------------------------------------------------------------------
 
 const buildSetRalphLoopMessage = (params: RalphLoopOptions): string => {
   const lines: string[] = ['set-ralph-loop:'];
 
-  // Static checks
   if (params.staticChecks.length > 0) {
     lines.push('  staticChecks:');
     for (const check of params.staticChecks) {
@@ -302,97 +307,93 @@ const buildSetRalphLoopMessage = (params: RalphLoopOptions): string => {
     lines.push('  staticChecks: []');
   }
 
-  // Completion
   lines.push(`  completion: ${params.completion}`);
+  lines.push(`  autofix: ${params.autofix}`);
   lines.push(`  mergeCondition: ${params.mergeCondition}`);
   lines.push(`  review: ${params.review}`);
 
+  if (params.acceptanceCriteria !== undefined) {
+    lines.push('  acceptanceCriteria: |');
+    for (const line of params.acceptanceCriteria.split('\n')) {
+      lines.push(`    ${line}`);
+    }
+  }
+
   lines.push('');
-  lines.push('Call set-ralph-loop once with these parameters to configure done criteria.');
+  lines.push('Call set-ralph-loop once with these exact parameters to configure done criteria.');
 
   return lines.join('\n');
 };
+
+const mergeLowLevelOptions = (
+  defaults: RalphLoopDefaults,
+  parsed: ParsedArgs,
+): RalphLoopOptions => {
+  const requirement = parsed.requirement;
+  const qa = parsed.qa;
+
+  return {
+    staticChecks: parsed.staticChecks.length > 0 ? parsed.staticChecks : defaults.staticChecks,
+    completion: parsed.completion ?? SAFE_LOW_LEVEL_OPTIONS.completion,
+    autofix: parsed.autofix ?? SAFE_LOW_LEVEL_OPTIONS.autofix,
+    mergeCondition: parsed.mergeCondition ?? SAFE_LOW_LEVEL_OPTIONS.mergeCondition,
+    review: parsed.review || SAFE_LOW_LEVEL_OPTIONS.review,
+    qa,
+    acceptanceCriteria: buildAcceptanceCriteria(qa, requirement, parsed.acceptanceCriteria),
+  };
+};
+
+const sendRalphLoopConfiguration = (
+  pi: ExtensionAPI,
+  commandName: string,
+  requirement: string,
+  params: RalphLoopOptions,
+): void => {
+  const message = buildSetRalphLoopMessage(params);
+
+  pi.sendUserMessage(
+    [
+      {
+        type: 'text',
+        text: [
+          `The user invoked /${commandName}. Configure the task using set-ralph-loop once with the following parameters.`,
+          '',
+          `Requirement: ${requirement || '(none — work on the current request)'}`,
+          '',
+          message,
+          '',
+          'Do not ask the user to confirm. Call set-ralph-loop now with these exact parameters.',
+        ].join('\n'),
+      },
+    ],
+    { deliverAs: 'followUp' },
+  );
+};
+
+const patternOptions = (
+  defaults: RalphLoopDefaults,
+  requirement: string,
+  preset: Omit<RalphLoopOptions, 'staticChecks' | 'acceptanceCriteria'>,
+): RalphLoopOptions => ({
+  ...preset,
+  staticChecks: defaults.staticChecks,
+  acceptanceCriteria: buildAcceptanceCriteria(preset.qa, requirement, undefined),
+});
 
 // ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-  // =========================================================================
-  // /ralph-configure
-  // =========================================================================
   pi.registerCommand('ralph-configure', {
     description:
-      'Create or update .pi/agent/ralph-loop/default-options.json interactively. Run this once to set your preferred defaults for /ralph-loop.',
-    handler: async (args, ctx) => {
+      'Create or update .pi/agent/ralph-loop/default-options.json. Only staticChecks are stored; completion/autofix/merge behavior is chosen per command or tool call.',
+    handler: async (_args, ctx) => {
       const cwd = ctx.cwd;
       const current = loadDefaultOptions(cwd);
 
-      ctx.ui.notify(
-        'Configuring ralph-loop defaults. This sets the default-options.json that /ralph-loop uses.',
-        'info',
-      );
-
-      // --- completion ---
-      const completionChoiceValue = await ctx.ui.select(
-        'Default completion policy:',
-        COMPLETION_VALUES.map((v) => `${v} — ${COMPLETION_LABELS[v]}`),
-      );
-
-      if (completionChoiceValue === undefined) {
-        ctx.ui.notify('ralph-configure cancelled.', 'warning');
-        return;
-      }
-
-      const completion = parseSelectValue(completionChoiceValue);
-
-      if (!isValidCompletion(completion)) {
-        ctx.ui.notify('ralph-configure: invalid completion value.', 'warning');
-        return;
-      }
-
-      // --- merge condition ---
-      // Only offer merge conditions that are valid with the chosen completion
-      const availableMergeConditions: readonly RalphLoopMergeCondition[] =
-        completion === 'pr' || completion === 'draft-pr'
-          ? ['none', 'ci-passed', 'comment-fixed']
-          : ['none'];
-
-      const mergeChoiceValue = await ctx.ui.select(
-        'Default merge condition:',
-        availableMergeConditions.map((v) => `${v} — ${MERGE_LABELS[v]}`),
-      );
-
-      if (mergeChoiceValue === undefined) {
-        ctx.ui.notify('ralph-configure cancelled.', 'warning');
-        return;
-      }
-
-      const mergeCondition = parseSelectValue(mergeChoiceValue);
-
-      if (!isValidMergeCondition(mergeCondition)) {
-        ctx.ui.notify('ralph-configure: invalid merge condition value.', 'warning');
-        return;
-      }
-
-      // --- review ---
-      const reviewResult = await ctx.ui.confirm(
-        'Enable agent review by default?',
-        current.review ? 'Yes (currently enabled)' : 'No (currently disabled)',
-      );
-
-      if (reviewResult === undefined) {
-        ctx.ui.notify('ralph-configure cancelled.', 'warning');
-        return;
-      }
-
-      const review = reviewResult;
-
-      // --- static checks ---
-      // Input multi-line
-      let staticChecks: readonly string[] = current.staticChecks;
       const staticCheckInput = await ctx.ui.input(
-        'Static check commands (one per line, empty = keep current):',
+        'Static check commands (one per line):',
         current.staticChecks.join('\n'),
       );
 
@@ -401,84 +402,85 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const trimmedInput = staticCheckInput.trim();
-      if (trimmedInput !== '') {
-        staticChecks = trimmedInput
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line !== '');
-      }
+      const staticChecks = staticCheckInput
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
 
-      const options: RalphLoopOptions = {
-        staticChecks,
-        completion: completion,
-        mergeCondition: mergeCondition,
-        review,
-      };
-
-      saveDefaultOptions(cwd, options);
-      ctx.ui.notify('Saved default options to .pi/agent/ralph-loop/default-options.json', 'info');
+      saveDefaultOptions(cwd, { staticChecks });
+      ctx.ui.notify('Saved staticChecks to .pi/agent/ralph-loop/default-options.json', 'info');
     },
   });
 
-  // =========================================================================
-  // /ralph-loop
-  // =========================================================================
   pi.registerCommand('ralph-loop', {
     description:
-      'Configure set-ralph-loop with CLI-like arguments. Merges with default-options.json.\n\n' +
-      'Usage: /ralph-loop [options] <requirement>\n\n' +
-      'Options:\n' +
-      '  --draft-pr                Create a draft PR on completion\n' +
-      '  --pr                      Create a PR on completion\n' +
-      '  --commit                  Commit on completion (default)\n' +
-      '  --only-edit               Only edit, no commit or PR\n' +
-      '  --review                  Enable agent review\n' +
-      '  --ci-passed               Auto-merge when CI passes\n' +
-      '  --comment-fixed           Wait for CI + resolve comments, then merge\n' +
-      '  --no-merge                No merge automation\n' +
-      '  --static-check <cmd>      Add a static check command (repeatable)\n' +
-      '  --static-check=<cmd>      Same, using = syntax\n' +
-      '  --acceptance <text>       Acceptance criteria text\n' +
-      '  --acceptance=<text>       Same, using = syntax\n' +
-      '  -c <cmd>                  Shorthand for --static-check\n\n' +
-      'Examples:\n' +
-      '  /ralph-loop --draft-pr --ci-passed "Implement user login"\n' +
-      '  /ralph-loop --pr --review --static-check "pnpm test" "Fix the bug"\n' +
-      '  /ralph-loop --commit "Refactor database layer"',
+      'Low-level ralph-loop API. Usage: /ralph-loop [--completion edit-only|draft-pr|pr] [--autofix none|ci|comment] [--merge none|fix-completed|approved] [--review] [--qa] [--static-check <cmd>] [--acceptance <text>] <requirement>',
     // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
     handler: async (args, ctx) => {
-      const cwd = ctx.cwd;
-      const defaults = loadDefaultOptions(cwd);
+      const defaults = loadDefaultOptions(ctx.cwd);
       const parsed = parseRalphLoopArgs(args);
-      const merged = mergeWithDefaults(defaults, parsed, parsed.requirement);
-
-      const message = buildSetRalphLoopMessage(merged.params);
+      const params = mergeLowLevelOptions(defaults, parsed);
 
       ctx.ui.notify(
-        `ralph-loop: completion=${merged.params.completion}, mergeCondition=${merged.params.mergeCondition}, review=${merged.params.review}`,
+        `ralph-loop: completion=${params.completion}, autofix=${params.autofix}, mergeCondition=${params.mergeCondition}, review=${params.review}, qa=${params.qa}`,
         'info',
       );
 
-      // Show the generated set-ralph-loop configuration message to the agent
-      // This tells the agent to call set-ralph-loop with these parameters.
-      pi.sendUserMessage(
-        [
-          {
-            type: 'text',
-            text: [
-              'The user invoked /ralph-loop. Configure the task using set-ralph-loop once with the following parameters.',
-              '',
-              `Requirement: ${merged.requirement || '(none — work on the current request)'}`,
-              '',
-              message,
-              '',
-              'Do not ask the user to confirm. Call set-ralph-loop now with these exact parameters.',
-            ].join('\n'),
-          },
-        ],
-        { deliverAs: 'followUp' },
-      );
+      sendRalphLoopConfiguration(pi, 'ralph-loop', parsed.requirement, params);
+    },
+  });
+
+  pi.registerCommand('ralph-check', {
+    description:
+      'Configure a lightweight verification gate: completion=edit-only, autofix=none, mergeCondition=none.',
+    // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
+    handler: async (args, ctx) => {
+      const defaults = loadDefaultOptions(ctx.cwd);
+      const requirement = parseRalphLoopArgs(args).requirement;
+      const params = patternOptions(defaults, requirement, SAFE_LOW_LEVEL_OPTIONS);
+
+      ctx.ui.notify('ralph-check: lightweight verification gate', 'info');
+      sendRalphLoopConfiguration(pi, 'ralph-check', requirement, params);
+    },
+  });
+
+  pi.registerCommand('ralph-pr', {
+    description:
+      'Configure a delegated draft-PR loop: completion=draft-pr, autofix=comment, mergeCondition=none, review=true, qa=true.',
+    // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
+    handler: async (args, ctx) => {
+      const defaults = loadDefaultOptions(ctx.cwd);
+      const requirement = parseRalphLoopArgs(args).requirement;
+      const params = patternOptions(defaults, requirement, {
+        completion: 'draft-pr',
+        autofix: 'comment',
+        mergeCondition: 'none',
+        review: true,
+        qa: true,
+      });
+
+      ctx.ui.notify('ralph-pr: draft PR with review, QA, CI, and comment follow-up', 'info');
+      sendRalphLoopConfiguration(pi, 'ralph-pr', requirement, params);
+    },
+  });
+
+  pi.registerCommand('ralph-delegate', {
+    description:
+      'Configure a highly delegated PR loop: completion=pr, autofix=comment, mergeCondition=fix-completed, review=true, qa=true.',
+    // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
+    handler: async (args, ctx) => {
+      const defaults = loadDefaultOptions(ctx.cwd);
+      const requirement = parseRalphLoopArgs(args).requirement;
+      const params = patternOptions(defaults, requirement, {
+        completion: 'pr',
+        autofix: 'comment',
+        mergeCondition: 'fix-completed',
+        review: true,
+        qa: true,
+      });
+
+      ctx.ui.notify('ralph-delegate: ready PR with review, QA, autofix, and merge', 'info');
+      sendRalphLoopConfiguration(pi, 'ralph-delegate', requirement, params);
     },
   });
 }

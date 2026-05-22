@@ -7,11 +7,12 @@ import {
 } from './ralphLoopConfig.service.ts';
 
 describe('ralphLoopConfig.service', () => {
-  test('requires gh when PR automation is configured', () => {
+  test('requires gh when PR completion, autofix, or merge automation is configured', () => {
     expect(
       requiresGitHubCli({
         staticChecks: [],
         completion: 'pr',
+        autofix: 'none',
         mergeCondition: 'none',
         review: false,
       }),
@@ -19,65 +20,75 @@ describe('ralphLoopConfig.service', () => {
     expect(
       requiresGitHubCli({
         staticChecks: [],
-        completion: 'only-edit',
-        mergeCondition: 'ci-passed',
-        review: false,
-      }),
-    ).toBe(true);
-    expect(
-      requiresGitHubCli({
-        staticChecks: [],
-        completion: 'draft-pr',
-        mergeCondition: 'comment-fixed',
-        review: false,
-      }),
-    ).toBe(true);
-    expect(
-      requiresGitHubCli({
-        staticChecks: [],
-        completion: 'commit',
+        completion: 'edit-only',
+        autofix: 'none',
         mergeCondition: 'none',
         review: false,
       }),
     ).toBe(false);
+    expect(
+      requiresGitHubCli({
+        staticChecks: [],
+        completion: 'draft-pr',
+        autofix: 'comment',
+        mergeCondition: 'none',
+        review: false,
+      }),
+    ).toBe(true);
   });
 
-  test('rejects merge automation without PR automation', () => {
+  test('rejects autofix and merge automation without PR completion', () => {
     expect(
       validateRalphLoopParams({
         staticChecks: [],
-        completion: 'commit',
-        mergeCondition: 'ci-passed',
+        completion: 'edit-only',
+        autofix: 'ci',
+        mergeCondition: 'none',
         review: false,
       }),
     ).toEqual({
       kind: 'invalid',
-      message: 'mergeCondition=ci-passed requires completion=pr or completion=draft-pr.',
+      message: 'autofix requires completion=pr or completion=draft-pr.',
     });
     expect(
       validateRalphLoopParams({
         staticChecks: [],
-        completion: 'commit',
-        mergeCondition: 'comment-fixed',
+        completion: 'edit-only',
+        autofix: 'none',
+        mergeCondition: 'fix-completed',
         review: false,
       }),
     ).toEqual({
       kind: 'invalid',
-      message: 'mergeCondition=comment-fixed requires completion=pr or completion=draft-pr.',
+      message: 'mergeCondition requires completion=pr or completion=draft-pr.',
+    });
+    expect(
+      validateRalphLoopParams({
+        staticChecks: [],
+        completion: 'pr',
+        autofix: 'none',
+        mergeCondition: 'approved',
+        review: false,
+      }),
+    ).toEqual({
+      kind: 'invalid',
+      message: 'mergeCondition requires autofix=ci or autofix=comment.',
     });
   });
 
-  test('returns configuration guidance for PR automation and merge automation', () => {
+  test('returns configuration guidance for PR automation, autofix, and merge automation', () => {
     expect(
       buildConfigurationGuidance({
         staticChecks: [],
         completion: 'pr',
-        mergeCondition: 'comment-fixed',
+        autofix: 'comment',
+        mergeCondition: 'fix-completed',
         review: false,
       }),
     ).toEqual([
-      'completion: pr is set, so set-ralph-loop will create the PR automatically upon completion. You do not need to create the PR manually, but you must commit your changes yourself and create the working branch yourself.',
-      'mergeCondition: comment-fixed is set, so set-ralph-loop will first wait for CI to complete (same as ci-passed), then block merge if any PR comments remain unanswered, providing reply guidance. Once all comments are resolved, it merges automatically.',
+      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must commit your changes yourself and create the working branch yourself.',
+      'autofix: comment is set, so set-ralph-loop will wait for PR CI, then check unresolved PR comments and keep the task open for the agent to address them. It will not merge by itself unless mergeCondition requests it.',
+      'mergeCondition: fix-completed is set, so set-ralph-loop will merge after the configured autofix checks pass.',
     ]);
   });
 });

@@ -2,8 +2,9 @@ import { runCommentFixedCheck } from './commentFixed.service.ts';
 
 export type RalphLoopParams = {
   readonly staticChecks: readonly string[];
-  readonly completion: 'only-edit' | 'commit' | 'pr' | 'draft-pr';
-  readonly mergeCondition: 'none' | 'ci-passed' | 'comment-fixed';
+  readonly completion: 'edit-only' | 'draft-pr' | 'pr';
+  readonly autofix: 'none' | 'ci' | 'comment';
+  readonly mergeCondition: 'none' | 'fix-completed' | 'approved';
   readonly review: boolean;
   readonly acceptanceCriteria?: string;
 };
@@ -89,6 +90,7 @@ export type RalphLoopState = {
 
 type RalphLoopBaseResult = {
   readonly completion: RalphLoopParams['completion'];
+  readonly autofix: RalphLoopParams['autofix'];
   readonly mergeCondition: RalphLoopParams['mergeCondition'];
   readonly staticChecks: readonly RalphLoopCommandResult[];
   readonly agentChecks: readonly RalphLoopAgentCheckResult[];
@@ -134,6 +136,9 @@ export type RalphLoopHooks = {
   readonly onCompletionAutomationStarted?: (
     mode: RalphLoopCompletionAutomationRequest['mode'],
   ) => Promise<void> | void;
+  readonly onAutofixStarted?: (
+    autofix: Exclude<RalphLoopParams['autofix'], 'none'>,
+  ) => Promise<void> | void;
   readonly onMergeConditionStarted?: (
     mergeCondition: Exclude<RalphLoopParams['mergeCondition'], 'none'>,
   ) => Promise<void> | void;
@@ -159,6 +164,8 @@ const CI_ASSERT_HAS_CHECKS_COMMAND =
 const CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND =
   'blocking="$(gh pr checks --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail" or .bucket == "pending" or .bucket == "cancel") | "\\(.name) [\\(.bucket)] \\(.link // "")"\')"; test -z "$blocking" || { printf "%s\\n" "$blocking"; exit 1; }';
 const CI_MERGE_COMMAND = 'gh pr merge --delete-branch --merge';
+const APPROVAL_WATCH_COMMAND =
+  'while true; do decision="$(gh pr view --json reviewDecision --jq .reviewDecision)"; test "$decision" = "APPROVED" && exit 0; echo "waiting for PR approval: reviewDecision=$decision"; sleep 30; done';
 
 const isSuccessful = (result: RalphLoopCommandResult): boolean => result.code === 0;
 
@@ -177,10 +184,9 @@ export const createRalphLoopState = (): RalphLoopState => ({
 
 const completionChecksFor = (completion: RalphLoopParams['completion']): readonly string[] => {
   switch (completion) {
-    case 'only-edit': {
+    case 'edit-only': {
       return [];
     }
-    case 'commit':
     case 'pr':
     case 'draft-pr': {
       return COMMIT_COMPLETION_CHECKS;
@@ -196,8 +202,7 @@ const completionAutomationRequestFor = (
   pullRequestTemplate: RalphLoopPullRequestTemplate | undefined,
 ): RalphLoopCompletionAutomationRequest | undefined => {
   switch (completion) {
-    case 'only-edit':
-    case 'commit': {
+    case 'edit-only': {
       return undefined;
     }
     case 'pr':
@@ -218,8 +223,7 @@ const completionVerificationChecksFor = (
   completion: RalphLoopParams['completion'],
 ): readonly string[] => {
   switch (completion) {
-    case 'only-edit':
-    case 'commit': {
+    case 'edit-only': {
       return [];
     }
     case 'pr': {
@@ -234,19 +238,17 @@ const completionVerificationChecksFor = (
   }
 };
 
-const mergeConditionChecksFor = (
-  mergeCondition: RalphLoopParams['mergeCondition'],
-): readonly string[] => {
-  switch (mergeCondition) {
+const autofixChecksFor = (autofix: RalphLoopParams['autofix']): readonly string[] => {
+  switch (autofix) {
     case 'none': {
       return [];
     }
-    case 'ci-passed':
-    case 'comment-fixed': {
+    case 'ci':
+    case 'comment': {
       return [CI_WATCH_COMMAND, CI_ASSERT_HAS_CHECKS_COMMAND, CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND];
     }
     default: {
-      return assertNever(mergeCondition);
+      return assertNever(autofix);
     }
   }
 };
@@ -401,6 +403,7 @@ export const runRalphLoop = async (
         kind: 'continue',
         reason: 'static-check-failed',
         completion: params.completion,
+        autofix: params.autofix,
         mergeCondition: params.mergeCondition,
         staticChecks,
         agentChecks: [],
@@ -428,6 +431,7 @@ export const runRalphLoop = async (
           kind: 'continue',
           reason: 'review-rejected',
           completion: params.completion,
+          autofix: params.autofix,
           mergeCondition: params.mergeCondition,
           staticChecks,
           agentChecks,
@@ -455,6 +459,7 @@ export const runRalphLoop = async (
           kind: 'continue',
           reason: 'acceptance-criteria-rejected',
           completion: params.completion,
+          autofix: params.autofix,
           mergeCondition: params.mergeCondition,
           staticChecks,
           agentChecks,
@@ -480,6 +485,7 @@ export const runRalphLoop = async (
         kind: 'continue',
         reason: 'completion-check-failed',
         completion: params.completion,
+        autofix: params.autofix,
         mergeCondition: params.mergeCondition,
         staticChecks,
         agentChecks,
@@ -518,6 +524,7 @@ export const runRalphLoop = async (
           kind: 'continue',
           reason: 'completion-automation-failed',
           completion: params.completion,
+          autofix: params.autofix,
           mergeCondition: params.mergeCondition,
           staticChecks,
           agentChecks,
@@ -546,6 +553,7 @@ export const runRalphLoop = async (
           kind: 'continue',
           reason: 'completion-check-failed',
           completion: params.completion,
+          autofix: params.autofix,
           mergeCondition: params.mergeCondition,
           staticChecks,
           agentChecks,
@@ -556,22 +564,23 @@ export const runRalphLoop = async (
     }
   }
 
-  const mergeConditionCheckCommands = mergeConditionChecksFor(params.mergeCondition);
+  const autofixCheckCommands = autofixChecksFor(params.autofix);
 
-  if (mergeConditionCheckCommands.length > 0 && params.mergeCondition !== 'none') {
-    await hooks?.onMergeConditionStarted?.(params.mergeCondition);
+  if (params.autofix !== 'none') {
+    await hooks?.onAutofixStarted?.(params.autofix);
   }
 
-  const mergeConditionChecks = [...(await runChecks(mergeConditionCheckCommands, execute))];
-  const lastMergeConditionCheck = mergeConditionChecks.at(-1);
+  const mergeConditionChecks = [...(await runChecks(autofixCheckCommands, execute))];
+  const lastAutofixCheck = mergeConditionChecks.at(-1);
 
-  if (lastMergeConditionCheck !== undefined && !isSuccessful(lastMergeConditionCheck)) {
+  if (lastAutofixCheck !== undefined && !isSuccessful(lastAutofixCheck)) {
     return {
       state: nextState,
       result: {
         kind: 'continue',
         reason: 'merge-condition-failed',
         completion: params.completion,
+        autofix: params.autofix,
         mergeCondition: params.mergeCondition,
         staticChecks,
         agentChecks,
@@ -586,7 +595,7 @@ export const runRalphLoop = async (
 
   let mergeConditionDetails: RalphLoopMergeConditionDetails | undefined;
 
-  if (params.mergeCondition === 'comment-fixed') {
+  if (params.autofix === 'comment') {
     const commentFixedOutcome = await runCommentFixedCheck(execute);
     mergeConditionChecks.push(...commentFixedOutcome.results);
     mergeConditionDetails = commentFixedOutcome.details;
@@ -600,6 +609,7 @@ export const runRalphLoop = async (
           kind: 'continue',
           reason: 'merge-condition-failed',
           completion: params.completion,
+          autofix: params.autofix,
           mergeCondition: params.mergeCondition,
           staticChecks,
           agentChecks,
@@ -609,6 +619,36 @@ export const runRalphLoop = async (
             : {}),
           mergeConditionChecks,
           mergeConditionDetails,
+        },
+      };
+    }
+  }
+
+  if (params.mergeCondition !== 'none') {
+    await hooks?.onMergeConditionStarted?.(params.mergeCondition);
+  }
+
+  if (params.mergeCondition === 'approved') {
+    const approvalCheck = await execute(APPROVAL_WATCH_COMMAND);
+    mergeConditionChecks.push(approvalCheck);
+
+    if (!isSuccessful(approvalCheck)) {
+      return {
+        state: nextState,
+        result: {
+          kind: 'continue',
+          reason: 'merge-condition-failed',
+          completion: params.completion,
+          autofix: params.autofix,
+          mergeCondition: params.mergeCondition,
+          staticChecks,
+          agentChecks,
+          completionChecks,
+          ...(completionAutomationResults.length > 0
+            ? { completionAutomation: completionAutomationResults }
+            : {}),
+          mergeConditionChecks,
+          ...(mergeConditionDetails === undefined ? {} : { mergeConditionDetails }),
         },
       };
     }
@@ -625,6 +665,7 @@ export const runRalphLoop = async (
           kind: 'continue',
           reason: 'merge-condition-failed',
           completion: params.completion,
+          autofix: params.autofix,
           mergeCondition: params.mergeCondition,
           staticChecks,
           agentChecks,
@@ -644,6 +685,7 @@ export const runRalphLoop = async (
     result: {
       kind: 'completed',
       completion: params.completion,
+      autofix: params.autofix,
       mergeCondition: params.mergeCondition,
       staticChecks,
       agentChecks,
@@ -651,7 +693,7 @@ export const runRalphLoop = async (
       ...(completionAutomationResults.length > 0
         ? { completionAutomation: completionAutomationResults }
         : {}),
-      ...(mergeConditionCheckCommands.length > 0 ? { mergeConditionChecks } : {}),
+      ...(mergeConditionChecks.length > 0 ? { mergeConditionChecks } : {}),
       ...(mergeConditionDetails === undefined ? {} : { mergeConditionDetails }),
     },
   };

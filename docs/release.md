@@ -66,13 +66,13 @@ After the GitHub Actions workflow finishes:
 
 ## Files Involved
 
-| File | Purpose |
-|------|---------|
-| `scripts/release.ts` | Interactive release script |
-| `.github/workflows/release.yaml` | CD workflow — publish to npm + draft release |
-| `.github/workflows/ci.yaml` | CI workflow (runs on PRs and main) |
-| `.github/actions/setup-node/action.yml` | Shared Node/pnpm setup action |
-| `package.json` (`publishConfig.access`) | npm publish access config |
+| File                                    | Purpose                                      |
+| --------------------------------------- | -------------------------------------------- |
+| `scripts/release.ts`                    | Interactive release script                   |
+| `.github/workflows/release.yaml`        | CD workflow — publish to npm + draft release |
+| `.github/workflows/ci.yaml`             | CI workflow (runs on PRs and main)           |
+| `.github/actions/setup-node/action.yml` | Shared Node/pnpm setup action                |
+| `package.json` (`publishConfig.access`) | npm publish access config                    |
 
 ## Notes
 

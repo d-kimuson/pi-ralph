@@ -1,4 +1,5 @@
 ## Review
+
 - Correct: `package.json` defines the release and placeholder build scripts (`package.json:20-21`), and `pnpm build` succeeds with the expected echo command.
 - Correct: `scripts/release.ts` runs the requested check commands in order: `pnpm audit --audit-level low`, `pnpm build`, `pnpm gatecheck check`, and `pnpm test` (`scripts/release.ts:265-269`). `pnpm test` passed locally: 9 files / 36 tests.
 - Correct: stable version bump choices and CLI resolution are mostly coherent: patch/minor/major/beta are generated from the current stable version (`scripts/release.ts:154-163`) and resolved for CLI use (`scripts/release.ts:176-199`). From a prerelease, `patch` resolves to the base stable version (`scripts/release.ts:176-180`), and `beta`/prerelease bump increments the current prerelease number (`scripts/release.ts:191-199`).
