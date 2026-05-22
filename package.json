@@ -6,6 +6,10 @@
     "pi-package"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/d-kimuson/pi-ralph.git"
+  },
   "files": [
     "extensions",
     "prompts",
