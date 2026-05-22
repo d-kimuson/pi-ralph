@@ -271,6 +271,7 @@ if (!confirmed) {
 console.log('\nRunning checks...\n');
 runOrFail('pnpm', ['audit', '--audit-level', 'low'], 'Audit');
 runOrFail('pnpm', ['build'], 'Build');
+runOrFail('pnpm', ['check:pack'], 'Package shape check');
 runOrFail('pnpm', ['gatecheck', 'check'], 'Gatecheck');
 runOrFail('pnpm', ['test'], 'Test');
 console.log('\nAll checks passed.\n');

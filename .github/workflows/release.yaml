@@ -30,7 +30,7 @@ jobs:
           fi
 
       - name: Publish to npm
-        run: pnpm publish --provenance --no-git-checks --access public --tag ${{ steps.dist-tag.outputs.tag }}
+        run: npm publish --ignore-scripts --provenance --access public --tag ${{ steps.dist-tag.outputs.tag }}
 
   release-notes:
     needs: publish

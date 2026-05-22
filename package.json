@@ -29,6 +29,7 @@
     "fix": "run-p fix:*",
     "fix:oxlint": "pnpm lint:oxlint --fix",
     "fix:oxfmt": "oxfmt --ignore-path .gitignore --no-error-on-unmatched-pattern",
+    "check:pack": "node scripts/check-pack.ts",
     "release": "node scripts/release.ts",
     "build": "echo No build step required for pi package"
   },
