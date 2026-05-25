@@ -38,11 +38,15 @@ For GitHub PR, CI, comment, or merge workflows, the repository must be usable wi
 
 ## Main commands
 
+Preset commands (`/ralph-check`, `/ralph-pr`, `/ralph-delegate`) treat all trailing text as freeform requirement text and forward it to the agent without CLI-style option parsing. CLI-style option parsing is only done by `/ralph-loop`.
+
 ### `/ralph-check`
 
 Lightweight verification gate.
 
 Use this when you want ralph-loop to run the configured static checks, and optionally agent-side checks, without touching Git or GitHub delivery.
+
+Trailing text is forwarded as the requirement without option parsing.
 
 Preset:
 
@@ -60,6 +64,8 @@ Create a draft PR and keep the loop open for higher-confidence delivery checks.
 
 Use this when you want the agent to prepare a PR but not merge it automatically.
 
+Trailing text is forwarded as the requirement without option parsing.
+
 Preset:
 
 ```yaml
@@ -75,6 +81,8 @@ qa: true
 Delegate the whole delivery flow to the agent.
 
 Use this when you want the agent to create a ready PR, fix CI/comment feedback, and merge once the configured follow-up is complete.
+
+Trailing text is forwarded as the requirement without option parsing.
 
 Preset:
 
@@ -147,19 +155,19 @@ Controls whether and when ralph-loop should merge the PR.
 ### Run local verification only
 
 ```text
-/ralph-check "Refactor the parser"
+/ralph-check Refactor the parser
 ```
 
 ### Ask the agent to prepare a draft PR
 
 ```text
-/ralph-pr "Add password reset flow"
+/ralph-pr Add password reset flow
 ```
 
 ### Delegate implementation through merge
 
 ```text
-/ralph-delegate "Fix the flaky checkout test"
+/ralph-delegate Fix the flaky checkout test
 ```
 
 ### Require approval before merge
@@ -170,7 +178,7 @@ Controls whether and when ralph-loop should merge the PR.
 
 ## How it works
 
-The package registers pi commands and tools. User-facing commands such as `/ralph-check`, `/ralph-pr`, and `/ralph-delegate` translate presets into a `set-ralph-loop` configuration. Once configured, the loop runs from pi's task-completion lifecycle and sends feedback back into the agent when a phase fails.
+The package registers pi commands and tools. User-facing commands such as `/ralph-check`, `/ralph-pr`, and `/ralph-delegate` translate presets into a `set-ralph-loop` configuration while forwarding their trailing text to the agent as freeform requirement text. `/ralph-loop` remains the low-level command with explicit option parsing. Once configured, the loop runs from pi's task-completion lifecycle and sends feedback back into the agent when a phase fails.
 
 Internally, ralph-loop is stateful: passed review and acceptance checks are reused on later retries, while failed static checks, PR checks, CI, comments, or merge conditions keep the task open until the agent fixes them or the loop is explicitly bypassed.
 

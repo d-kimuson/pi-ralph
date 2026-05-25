@@ -36,6 +36,41 @@ const SAFE_LOW_LEVEL_OPTIONS = {
   qa: false,
 } as const satisfies Omit<RalphLoopOptions, 'staticChecks' | 'acceptanceCriteria'>;
 
+const PRESET_COMMANDS = {
+  'ralph-check': {
+    notification: 'ralph-check: lightweight verification gate',
+    preset: SAFE_LOW_LEVEL_OPTIONS,
+  },
+  'ralph-pr': {
+    notification: 'ralph-pr: draft PR with review, QA, CI, and comment follow-up',
+    preset: {
+      completion: 'draft-pr',
+      autofix: 'comment',
+      mergeCondition: 'none',
+      review: true,
+      qa: true,
+    },
+  },
+  'ralph-delegate': {
+    notification: 'ralph-delegate: ready PR with review, QA, autofix, and merge',
+    preset: {
+      completion: 'pr',
+      autofix: 'comment',
+      mergeCondition: 'fix-completed',
+      review: true,
+      qa: true,
+    },
+  },
+} as const satisfies Record<
+  string,
+  {
+    readonly notification: string;
+    readonly preset: Omit<RalphLoopOptions, 'staticChecks' | 'acceptanceCriteria'>;
+  }
+>;
+
+type PresetCommandName = keyof typeof PRESET_COMMANDS;
+
 // ---------------------------------------------------------------------------
 // Default-options file helpers
 // ---------------------------------------------------------------------------
@@ -114,7 +149,7 @@ type ParsedArgs = {
 const readNextToken = (tokens: readonly string[], index: number): string | undefined =>
   tokens[index + 1];
 
-const parseRalphLoopArgs = (args: string): ParsedArgs => {
+export const parseRalphLoopArgs = (args: string): ParsedArgs => {
   const tokens = tokenize(args);
   const staticChecks: string[] = [];
   let completion: RalphLoopCompletion | undefined;
@@ -351,6 +386,9 @@ const sendRalphLoopConfiguration = (
 ): void => {
   const message = buildSetRalphLoopMessage(params);
 
+  const displayedRequirement =
+    requirement.trim() === '' ? '(none — work on the current request)' : requirement;
+
   pi.sendUserMessage(
     [
       {
@@ -358,7 +396,7 @@ const sendRalphLoopConfiguration = (
         text: [
           `The user invoked /${commandName}. Configure the task using set-ralph-loop once with the following parameters.`,
           '',
-          `Requirement: ${requirement || '(none — work on the current request)'}`,
+          `Requirement: ${displayedRequirement}`,
           '',
           message,
           '',
@@ -379,6 +417,27 @@ const patternOptions = (
   staticChecks: defaults.staticChecks,
   acceptanceCriteria: buildAcceptanceCriteria(preset.qa, requirement, undefined),
 });
+
+export const normalizePresetRequirement = (args: string): string => args;
+
+export const createPresetCommandConfiguration = (
+  defaults: RalphLoopDefaults,
+  args: string,
+  commandName: PresetCommandName,
+): {
+  readonly notification: string;
+  readonly requirement: string;
+  readonly params: RalphLoopOptions;
+} => {
+  const definition = PRESET_COMMANDS[commandName];
+  const requirement = normalizePresetRequirement(args);
+
+  return {
+    notification: definition.notification,
+    requirement,
+    params: patternOptions(defaults, requirement, definition.preset),
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Extension entry point
@@ -436,11 +495,15 @@ export default function (pi: ExtensionAPI) {
     // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
     handler: async (args, ctx) => {
       const defaults = loadDefaultOptions(ctx.cwd);
-      const requirement = parseRalphLoopArgs(args).requirement;
-      const params = patternOptions(defaults, requirement, SAFE_LOW_LEVEL_OPTIONS);
+      const configuration = createPresetCommandConfiguration(defaults, args, 'ralph-check');
 
-      ctx.ui.notify('ralph-check: lightweight verification gate', 'info');
-      sendRalphLoopConfiguration(pi, 'ralph-check', requirement, params);
+      ctx.ui.notify(configuration.notification, 'info');
+      sendRalphLoopConfiguration(
+        pi,
+        'ralph-check',
+        configuration.requirement,
+        configuration.params,
+      );
     },
   });
 
@@ -450,17 +513,10 @@ export default function (pi: ExtensionAPI) {
     // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
     handler: async (args, ctx) => {
       const defaults = loadDefaultOptions(ctx.cwd);
-      const requirement = parseRalphLoopArgs(args).requirement;
-      const params = patternOptions(defaults, requirement, {
-        completion: 'draft-pr',
-        autofix: 'comment',
-        mergeCondition: 'none',
-        review: true,
-        qa: true,
-      });
+      const configuration = createPresetCommandConfiguration(defaults, args, 'ralph-pr');
 
-      ctx.ui.notify('ralph-pr: draft PR with review, QA, CI, and comment follow-up', 'info');
-      sendRalphLoopConfiguration(pi, 'ralph-pr', requirement, params);
+      ctx.ui.notify(configuration.notification, 'info');
+      sendRalphLoopConfiguration(pi, 'ralph-pr', configuration.requirement, configuration.params);
     },
   });
 
@@ -470,17 +526,15 @@ export default function (pi: ExtensionAPI) {
     // eslint-disable-next-line @typescript-eslint/require-await -- handler signature requires Promise<void>
     handler: async (args, ctx) => {
       const defaults = loadDefaultOptions(ctx.cwd);
-      const requirement = parseRalphLoopArgs(args).requirement;
-      const params = patternOptions(defaults, requirement, {
-        completion: 'pr',
-        autofix: 'comment',
-        mergeCondition: 'fix-completed',
-        review: true,
-        qa: true,
-      });
+      const configuration = createPresetCommandConfiguration(defaults, args, 'ralph-delegate');
 
-      ctx.ui.notify('ralph-delegate: ready PR with review, QA, autofix, and merge', 'info');
-      sendRalphLoopConfiguration(pi, 'ralph-delegate', requirement, params);
+      ctx.ui.notify(configuration.notification, 'info');
+      sendRalphLoopConfiguration(
+        pi,
+        'ralph-delegate',
+        configuration.requirement,
+        configuration.params,
+      );
     },
   });
 }
