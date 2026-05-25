@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { basename } from 'node:path';
@@ -41,28 +42,89 @@ export type RunDecisionAgentOptions<Request> = {
   ) => Promise<void> | void;
 };
 
-const getPiInvocation = (
-  args: string[],
-): { readonly command: string; readonly args: readonly string[] } => {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith('/$bunfs/root/');
+const PI_CLI_PATH_ENV = 'PI_RALPH_PI_CLI_PATH';
+const PI_EXECUTABLE_NAME_PATTERN = /^pi(?:\.exe)?$/;
+const PI_CLI_SCRIPT_PATH_PATTERN =
+  /(?:^|\/)@earendil-works\/pi-coding-agent\/dist\/cli\.(?:[cm]?js)$/;
 
-  if (currentScript !== undefined && isBunVirtualScript !== true) {
+type ProcessInfo = Pick<NodeJS.Process, 'argv' | 'env' | 'execPath'>;
+
+const normalizePath = (filePath: string): string => filePath.replace(/\\/gu, '/');
+
+const getResolvedPathCandidates = (filePath: string): readonly string[] => {
+  const normalizedPath = normalizePath(filePath);
+
+  try {
+    const resolvedPath = normalizePath(realpathSync(filePath));
+
+    return resolvedPath === normalizedPath ? [normalizedPath] : [normalizedPath, resolvedPath];
+  } catch {
+    return [normalizedPath];
+  }
+};
+
+const isBunVirtualScript = (scriptPath: string): boolean => scriptPath.startsWith('/$bunfs/root/');
+
+const isPiCliScript = (scriptPath: string): boolean =>
+  getResolvedPathCandidates(scriptPath).some((candidatePath) => {
+    const scriptName = basename(candidatePath).toLowerCase();
+
+    if (PI_EXECUTABLE_NAME_PATTERN.test(scriptName)) {
+      return true;
+    }
+
+    return PI_CLI_SCRIPT_PATH_PATTERN.test(candidatePath);
+  });
+
+const isPiExecutable = (execPath: string): boolean =>
+  getResolvedPathCandidates(execPath).some((candidatePath) =>
+    PI_EXECUTABLE_NAME_PATTERN.test(basename(candidatePath).toLowerCase()),
+  );
+
+const getConfiguredPiCommand = (processInfo: ProcessInfo): string | undefined => {
+  const configuredCommand = processInfo.env[PI_CLI_PATH_ENV]?.trim();
+
+  if (configuredCommand === undefined || configuredCommand === '') {
+    return undefined;
+  }
+
+  return configuredCommand;
+};
+
+export const getPiInvocation = (
+  args: string[],
+  processInfo: ProcessInfo = process,
+): { readonly command: string; readonly args: readonly string[] } => {
+  const configuredPiCommand = getConfiguredPiCommand(processInfo);
+
+  if (configuredPiCommand !== undefined) {
+    return { command: configuredPiCommand, args };
+  }
+
+  const currentScript = processInfo.argv[1];
+
+  if (
+    currentScript !== undefined &&
+    isBunVirtualScript(currentScript) !== true &&
+    isPiCliScript(currentScript)
+  ) {
     return {
-      command: process.execPath,
+      command: processInfo.execPath,
       args: [currentScript, ...args],
     };
   }
 
-  const execName = basename(process.execPath).toLowerCase();
-  const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-
-  if (!isGenericRuntime) {
-    return { command: process.execPath, args };
+  if (isPiExecutable(processInfo.execPath)) {
+    return { command: processInfo.execPath, args };
   }
 
   return { command: 'pi', args };
 };
+
+const buildPiFallbackHint = (command: string): string =>
+  command === 'pi'
+    ? ` If you are running inside an embedded host, set ${PI_CLI_PATH_ENV}=/absolute/path/to/pi.`
+    : '';
 
 const parseDecisionFromDetails = (details: unknown): RalphLoopDecision | undefined => {
   if (typeof details !== 'object' || details === null || !('result' in details)) {
@@ -228,11 +290,21 @@ export const runDecisionAgent = async <Request>(
     for (;;) {
       const args = buildAgentArgs(sessionDir, promptPath, options, continueSession);
       const invocation = getPiInvocation(args);
-      const result = await execCommand(invocation.command, [...invocation.args], {
-        cwd: options.cwd,
-        signal: options.signal,
-        timeout: options.timeoutMs,
-      });
+      let result: ExecResult;
+
+      try {
+        result = await execCommand(invocation.command, [...invocation.args], {
+          cwd: options.cwd,
+          signal: options.signal,
+          timeout: options.timeoutMs,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+
+        throw new Error(
+          `set-ralph-loop ${options.requestLabel} agent failed to launch ${invocation.command}: ${detail}${buildPiFallbackHint(invocation.command)}`,
+        );
+      }
       const decision = extractToolDecision(result.stdout, options.toolName);
 
       if (decision !== undefined) {
@@ -242,7 +314,7 @@ export const runDecisionAgent = async <Request>(
       if (result.code !== 0) {
         const output = result.stderr === '' ? result.stdout : result.stderr;
         throw new Error(
-          `set-ralph-loop ${options.requestLabel} agent failed without a ${options.toolName} decision (exit ${result.code}): ${output}`,
+          `set-ralph-loop ${options.requestLabel} agent failed without a ${options.toolName} decision (exit ${result.code}): ${output}${buildPiFallbackHint(invocation.command)}`,
         );
       }
 

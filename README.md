@@ -182,6 +182,8 @@ The package registers pi commands and tools. User-facing commands such as `/ralp
 
 Internally, ralph-loop is stateful: passed review and acceptance checks are reused on later retries, while failed static checks, PR checks, CI, comments, or merge conditions keep the task open until the agent fixes them or the loop is explicitly bypassed.
 
+The internal review/completion agents relaunch the `pi` CLI. If you run pi-ralph inside an embedded SDK host and need to force a specific CLI path, set `PI_RALPH_PI_CLI_PATH=/absolute/path/to/pi`.
+
 ## Development
 
 ```bash
