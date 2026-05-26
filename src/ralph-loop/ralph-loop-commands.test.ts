@@ -4,7 +4,7 @@ import {
   createPresetCommandConfiguration,
   normalizePresetRequirement,
   parseRalphLoopArgs,
-} from './ralph-loop-commands.ts';
+} from '../../extensions/ralph-loop-commands.ts';
 
 type PresetCommandName = Parameters<typeof createPresetCommandConfiguration>[2];
 

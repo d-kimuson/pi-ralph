@@ -114,6 +114,8 @@ const requirePrefix = (files: readonly string[], expectedPrefix: string): void =
   }
 };
 
+const forbiddenPatterns = [/^extensions\/.*\.test\.[^.]+$/u];
+
 const forbiddenPrefixes = ['.agents/', '.github/', 'docs/', 'scripts/', 'node_modules/'];
 
 const packageJson = readPackageJson();
@@ -135,6 +137,13 @@ for (const file of files) {
   const forbidden = forbiddenPrefixes.find((prefix) => file.startsWith(prefix));
   if (forbidden !== undefined) {
     fail(`Packed package must not include ${file} (${forbidden} is release/internal-only).`);
+  }
+
+  const forbiddenPattern = forbiddenPatterns.find((pattern) => pattern.test(file));
+  if (forbiddenPattern !== undefined) {
+    fail(
+      `Packed package must not include ${file} (test files under extensions are not runtime extensions).`,
+    );
   }
 }
 
