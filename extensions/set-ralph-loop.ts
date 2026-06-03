@@ -110,7 +110,7 @@ const summarizeResult = (outcome: RalphLoopOutcome): string => {
 
   switch (result.kind) {
     case 'completed': {
-      return 'set-ralph-loop completed: all configured static checks, agent checks, completion automation, and merge conditions passed.';
+      return 'set-ralph-loop completed: all configured static checks, agent checks, completion automation, autofix checks, and merge conditions passed.';
     }
     case 'continue': {
       if (result.reason === 'static-check-failed') {
@@ -139,16 +139,40 @@ const summarizeResult = (outcome: RalphLoopOutcome): string => {
         return 'set-ralph-loop requires more work: a completion automation step failed.';
       }
 
-      if (result.reason === 'merge-condition-failed') {
-        if (result.mergeConditionDetails?.kind === 'comment-fixed') {
+      if (result.reason === 'autofix-ci-failed') {
+        const details = lastMeaningfulOutput(result.autofixChecks);
+
+        return details === undefined
+          ? 'set-ralph-loop requires more work: PR CI still needs fixes.'
+          : `set-ralph-loop requires more work: PR CI still needs fixes (${details}).`;
+      }
+
+      if (result.reason === 'autofix-comment-failed') {
+        if (result.autofixDetails?.kind === 'comment-fixed') {
           return 'set-ralph-loop requires more work: unresolved PR comments still need replies before merge.';
         }
 
+        const details = lastMeaningfulOutput(result.autofixChecks);
+
+        return details === undefined
+          ? 'set-ralph-loop requires more work: unresolved PR comments still need work.'
+          : `set-ralph-loop requires more work: unresolved PR comments still need work (${details}).`;
+      }
+
+      if (result.reason === 'merge-approval-failed') {
         const details = lastMeaningfulOutput(result.mergeConditionChecks);
 
         return details === undefined
-          ? 'set-ralph-loop requires more work: a merge condition failed.'
-          : `set-ralph-loop requires more work: merge condition failed (${details}).`;
+          ? 'set-ralph-loop requires more work: PR approval is still required before merge.'
+          : `set-ralph-loop requires more work: PR approval is still required before merge (${details}).`;
+      }
+
+      if (result.reason === 'merge-command-failed') {
+        const details = lastMeaningfulOutput(result.mergeConditionChecks);
+
+        return details === undefined
+          ? 'set-ralph-loop requires more work: the merge step failed.'
+          : `set-ralph-loop requires more work: merge step failed (${details}).`;
       }
 
       const failedAgentCheck = result.agentChecks.at(-1);
@@ -179,11 +203,11 @@ const createFollowUpContent = (outcome: RalphLoopOutcome): string => {
 
   if (
     outcome.result.kind === 'continue' &&
-    outcome.result.reason === 'merge-condition-failed' &&
-    outcome.result.mergeConditionDetails?.kind === 'comment-fixed' &&
-    outcome.result.mergeConditionDetails.pendingComments.length > 0
+    outcome.result.reason === 'autofix-comment-failed' &&
+    outcome.result.autofixDetails?.kind === 'comment-fixed' &&
+    outcome.result.autofixDetails.pendingComments.length > 0
   ) {
-    content.splice(2, 0, buildCommentFixedFollowUp(outcome.result.mergeConditionDetails));
+    content.splice(2, 0, buildCommentFixedFollowUp(outcome.result.autofixDetails));
   }
 
   return content.join('\n\n');
@@ -370,14 +394,24 @@ const runConfiguredLoop = async (
         onAutofixStarted: (autofix) => {
           notifyProgress(
             autofix === 'comment'
-              ? 'set-ralph-loop: PR automation passed. waiting for CI, then checking unresolved PR comments...'
-              : 'set-ralph-loop: PR automation passed. waiting for CI...',
+              ? 'set-ralph-loop: PR automation passed. waiting for CI if present, then checking unresolved PR comments...'
+              : 'set-ralph-loop: PR automation passed. waiting for CI if present...',
             ctx,
           );
         },
-        onMergeConditionStarted: (mergeCondition) => {
+        onMergeConditionStarted: (params) => {
+          if (params.completion === 'draft-pr' && params.mergeCondition.enabled) {
+            notifyProgress(
+              params.mergeCondition.approved
+                ? 'set-ralph-loop: autofix checks passed. marking the draft PR ready for review, then waiting for approval before merge...'
+                : 'set-ralph-loop: autofix checks passed. marking the draft PR ready for review, then merging automatically...',
+              ctx,
+            );
+            return;
+          }
+
           notifyProgress(
-            mergeCondition === 'approved'
+            params.mergeCondition.enabled && params.mergeCondition.approved
               ? 'set-ralph-loop: autofix checks passed. waiting until PR approval before merge...'
               : 'set-ralph-loop: autofix checks passed. merging automatically...',
             ctx,
@@ -461,7 +495,7 @@ const createConfigurationResponseText = (params: RalphLoopParams): string => {
   return [
     'set-ralph-loop configured. Work on the task normally; the configured checks will run automatically when you are done and stop taking further actions.',
     'Trigger condition: when you believe the task is complete, do not wait, do not run sleep, and do not run unrelated confirmation commands just to see whether ralph-loop fires. Simply stop and let the current turn end; ralph-loop will start automatically from that agent_end.',
-    'If this was configured autonomously without an explicit PR/delegation/merge request, treat it as a lightweight verification gate only: use static checks with completion=edit-only, autofix=none, and mergeCondition=none.',
+    'If this was configured autonomously without an explicit PR/delegation/merge request, treat it as a lightweight verification gate only: use static checks with completion=edit-only, autofix=none, and mergeCondition={ enabled: false }.',
     ...guidance,
   ].join('\n\n');
 };
@@ -471,11 +505,11 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
     name: 'set-ralph-loop',
     label: 'Set Ralph Loop',
     description:
-      'Configure ralph-loop completion checks for the current task. Autonomous use is allowed only as a lightweight verification gate: use the configured static checks with completion=edit-only, autofix=none, and mergeCondition=none unless the user explicitly asks for PR/delegation/merge automation or invokes a ralph command.',
+      'Configure ralph-loop completion checks for the current task. Autonomous use is allowed only as a lightweight verification gate: use the configured static checks with completion=edit-only, autofix=none, and mergeCondition={ enabled: false } unless the user explicitly asks for PR/delegation/merge automation or invokes a ralph command.',
     promptSnippet:
-      'Use set-ralph-loop autonomously only for lightweight verification (static checks, completion=edit-only, autofix=none, mergeCondition=none). Use PR/autofix/merge modes only when explicitly requested or provided by a ralph command.',
+      'Use set-ralph-loop autonomously only for lightweight verification (static checks, completion=edit-only, autofix=none, mergeCondition={ enabled: false }). Use PR/autofix/merge modes only when explicitly requested or provided by a ralph command.',
     promptGuidelines: [
-      'Autonomous use must be lightweight only: configured staticChecks, completion=edit-only, autofix=none, mergeCondition=none.',
+      'Autonomous use must be lightweight only: configured staticChecks, completion=edit-only, autofix=none, mergeCondition={ enabled: false }.',
       'Use PR/autofix/merge modes only when explicitly requested by the user or supplied by a ralph command.',
       'Do not call set-ralph-loop again after it has been configured for the current session and directory.',
       'After configuration, finish normal task work; when done, stop so agent_end can run ralph-loop.',
@@ -503,12 +537,24 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
         description:
           'Autofix scope. Must be exactly one of: none, ci, comment. Use none unless CI/comment follow-up was explicitly requested or supplied by a ralph command.',
       }),
-      mergeCondition: Type.Unsafe<RalphLoopParams['mergeCondition']>({
-        type: 'string',
-        enum: ['none', 'fix-completed', 'approved'],
-        description:
-          'Optional merge policy. Must be exactly one of: none, fix-completed, approved. Use none unless merge automation was explicitly requested or supplied by a ralph command.',
-      }),
+      mergeCondition: Type.Union(
+        [
+          Type.Object({
+            enabled: Type.Literal(false),
+          }),
+          Type.Object({
+            enabled: Type.Literal(true),
+            approved: Type.Boolean({
+              description:
+                'Whether GitHub PR approval must be present before merge after autofix completes.',
+            }),
+          }),
+        ],
+        {
+          description:
+            'Optional merge policy. Use { enabled: false } unless merge automation was explicitly requested or supplied by a ralph command.',
+        },
+      ),
       review: Type.Optional(
         Type.Boolean({
           description: 'Whether an agent-based review check is required before completion.',

@@ -1,4 +1,4 @@
-import type { RalphLoopMergeConditionDetails } from './ralphLoop.service.ts';
+import type { RalphLoopAutofixDetails } from './ralphLoop.service.ts';
 
 const truncateBody = (body: string): string => {
   const normalized = body.trim().replaceAll('\n', ' ');
@@ -11,7 +11,7 @@ const truncateBody = (body: string): string => {
 };
 
 export const buildCommentFixedFollowUp = (
-  details: Pick<RalphLoopMergeConditionDetails, 'headSha' | 'pendingComments'>,
+  details: Pick<RalphLoopAutofixDetails, 'headSha' | 'pendingComments'>,
 ): string =>
   [
     'Pending PR comments to address before merge:',

@@ -4,9 +4,9 @@ import { createRalphLoopState, runRalphLoop } from './ralphLoop.service.ts';
 
 const PR_VERIFY_URL_COMMAND = 'gh pr view --json url --jq .url';
 const PR_VERIFY_READY_COMMAND = 'test "$(gh pr view --json isDraft --jq .isDraft)" = "false"';
+const DRAFT_PR_VERIFY_COMMAND = 'test "$(gh pr view --json isDraft --jq .isDraft)" = "true"';
+const PR_READY_FOR_REVIEW_COMMAND = 'gh pr ready';
 const CI_WATCH_COMMAND = 'gh pr checks --watch --fail-fast || true';
-const CI_ASSERT_HAS_CHECKS_COMMAND =
-  'checks="$(gh pr checks --json name --jq \'.[0].name // empty\')"; test -n "$checks" || { echo "no CI checks reported on this PR"; exit 1; }';
 const CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND =
   'blocking="$(gh pr checks --json name,bucket,state,link --jq \'.[] | select(.bucket == "fail" or .bucket == "pending" or .bucket == "cancel") | "\\(.name) [\\(.bucket)] \\(.link // "")"\')"; test -z "$blocking" || { printf "%s\\n" "$blocking"; exit 1; }';
 const CI_MERGE_COMMAND = 'gh pr merge --delete-branch --merge';
@@ -161,7 +161,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm typecheck'],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'ship it',
       },
@@ -179,7 +179,7 @@ describe('runRalphLoop', () => {
         reason: 'static-check-failed',
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         staticChecks: [
           {
             command: 'pnpm typecheck',
@@ -226,7 +226,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'all requirements are met',
       },
@@ -291,7 +291,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'all requirements are met',
       },
@@ -315,12 +315,13 @@ describe('runRalphLoop', () => {
           status: 'passed',
           message: 'acceptance criteria passed',
         },
+        phase: 'idle',
       },
       result: {
         kind: 'completed',
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         staticChecks: [
           {
             command: 'pnpm gatecheck check',
@@ -371,7 +372,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'all requirements are met',
       },
@@ -388,7 +389,7 @@ describe('runRalphLoop', () => {
         reason: 'review-rejected',
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         staticChecks: [
           {
             command: 'pnpm gatecheck check',
@@ -451,7 +452,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'criterion 1 and criterion 2 pass',
       },
@@ -465,7 +466,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'criterion 1 and criterion 2 pass',
       },
@@ -491,12 +492,13 @@ describe('runRalphLoop', () => {
           status: 'passed',
           message: 'acceptance criteria passed',
         },
+        phase: 'idle',
       },
       result: {
         kind: 'completed',
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         staticChecks: [
           {
             command: 'pnpm gatecheck check',
@@ -551,7 +553,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: false,
       },
       createRalphLoopState(),
@@ -590,7 +592,7 @@ describe('runRalphLoop', () => {
       kind: 'completed',
       completion: 'pr',
       autofix: 'none',
-      mergeCondition: 'none',
+      mergeCondition: { enabled: false },
       staticChecks: [
         {
           command: 'pnpm gatecheck check',
@@ -666,7 +668,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'draft-pr',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: false,
       },
       createRalphLoopState(),
@@ -690,7 +692,7 @@ describe('runRalphLoop', () => {
       reason: 'completion-automation-failed',
       completion: 'draft-pr',
       autofix: 'none',
-      mergeCondition: 'none',
+      mergeCondition: { enabled: false },
       staticChecks: [
         {
           command: 'pnpm gatecheck check',
@@ -760,7 +762,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'ci',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       },
       createRalphLoopState(),
@@ -789,7 +791,6 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
       `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
       'phase:merge-condition',
       `command:${CI_MERGE_COMMAND}`,
@@ -799,7 +800,6 @@ describe('runRalphLoop', () => {
   test('returns continue when CI fails after PR automation succeeds', async () => {
     const sequence: string[] = [];
     const commands = createCommandExecutor(sequence, [
-      { code: 0 },
       { code: 0 },
       { code: 0 },
       { code: 0 },
@@ -822,7 +822,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'ci',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       },
       createRalphLoopState(),
@@ -843,15 +843,14 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
       `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
     ]);
     expect(outcome.result).toEqual({
       kind: 'continue',
-      reason: 'merge-condition-failed',
+      reason: 'autofix-ci-failed',
       completion: 'pr',
       autofix: 'ci',
-      mergeCondition: 'fix-completed',
+      mergeCondition: { enabled: true, approved: false },
       staticChecks: [
         {
           command: 'pnpm gatecheck check',
@@ -903,15 +902,9 @@ describe('runRalphLoop', () => {
           },
         },
       ],
-      mergeConditionChecks: [
+      autofixChecks: [
         {
           command: CI_WATCH_COMMAND,
-          code: 0,
-          stdout: '',
-          stderr: '',
-        },
-        {
-          command: CI_ASSERT_HAS_CHECKS_COMMAND,
           code: 0,
           stdout: '',
           stderr: '',
@@ -936,7 +929,6 @@ describe('runRalphLoop', () => {
       { code: 0 },
       { code: 0 },
       { code: 0 },
-      { code: 0 },
       { code: 1, stdout: 'build [pending] https://github.com/example/repo/actions/runs/2' },
     ]);
     const agent = createAgentExecutor(sequence, []);
@@ -952,7 +944,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'ci',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       },
       createRalphLoopState(),
@@ -973,20 +965,18 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
       `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
     ]);
     expect(outcome.result.kind).toBe('continue');
     if (outcome.result.kind !== 'continue') {
       throw new Error('expected continue');
     }
-    expect(outcome.result.reason).toBe('merge-condition-failed');
+    expect(outcome.result.reason).toBe('autofix-ci-failed');
   });
 
   test('returns continue when comment-fixed finds unresolved comments after CI passes', async () => {
     const sequence: string[] = [];
     const commands = createCommandExecutor(sequence, [
-      { code: 0 },
       { code: 0 },
       { code: 0 },
       { code: 0 },
@@ -1017,7 +1007,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'comment',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       },
       createRalphLoopState(),
@@ -1038,7 +1028,6 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
       `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
       'command:gh repo view --json nameWithOwner',
       'command:gh pr view --json number,author',
@@ -1049,8 +1038,8 @@ describe('runRalphLoop', () => {
     if (outcome.result.kind !== 'continue') {
       throw new Error('expected continue');
     }
-    expect(outcome.result.reason).toBe('merge-condition-failed');
-    expect(outcome.result.mergeConditionDetails).toEqual({
+    expect(outcome.result.reason).toBe('autofix-comment-failed');
+    expect(outcome.result.autofixDetails).toEqual({
       kind: 'comment-fixed',
       headSha: 'abcdef1234567890',
       pendingComments: [
@@ -1064,7 +1053,7 @@ describe('runRalphLoop', () => {
         },
       ],
     });
-    expect(outcome.result.mergeConditionChecks?.at(-1)).toEqual({
+    expect(outcome.result.autofixChecks?.at(-1)).toEqual({
       command: COMMENT_FIXED_INSPECT_COMMAND,
       code: 1,
       stdout:
@@ -1076,7 +1065,6 @@ describe('runRalphLoop', () => {
   test('merges after comment-fixed finds no unresolved comments', async () => {
     const sequence: string[] = [];
     const commands = createCommandExecutor(sequence, [
-      { code: 0 },
       { code: 0 },
       { code: 0 },
       { code: 0 },
@@ -1108,7 +1096,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'comment',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       },
       createRalphLoopState(),
@@ -1129,7 +1117,6 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
       `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
       'command:gh repo view --json nameWithOwner',
       'command:gh pr view --json number,author',
@@ -1149,10 +1136,11 @@ describe('runRalphLoop', () => {
       { code: 0 },
       { code: 0 },
       { code: 0 },
+      { code: 0, stdout: 'initial watch' },
+      { code: 0, stdout: 'initial blocking passed' },
       { code: 0 },
-      { code: 0 },
-      { code: 0 },
-      { code: 0 },
+      { code: 0, stdout: 'rerun watch' },
+      { code: 0, stdout: 'rerun blocking passed' },
       { code: 0 },
     ]);
     const agent = createAgentExecutor(sequence, []);
@@ -1168,7 +1156,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'ci',
-        mergeCondition: 'approved',
+        mergeCondition: { enabled: true, approved: true },
         review: false,
       },
       createRalphLoopState(),
@@ -1189,9 +1177,82 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
       `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
       `command:${APPROVAL_WATCH_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
+      `command:${CI_MERGE_COMMAND}`,
+    ]);
+    expect(outcome.result.kind).toBe('completed');
+    if (outcome.result.kind !== 'completed') {
+      throw new Error('expected completed');
+    }
+    expect(outcome.result.autofixChecks).toEqual([
+      {
+        command: CI_WATCH_COMMAND,
+        code: 0,
+        stdout: 'rerun watch',
+        stderr: '',
+      },
+      {
+        command: CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND,
+        code: 0,
+        stdout: 'rerun blocking passed',
+        stderr: '',
+      },
+    ]);
+  });
+
+  test('marks a draft PR ready for review before automatic merge', async () => {
+    const sequence: string[] = [];
+    const commands = createCommandExecutor(sequence, [
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+    ]);
+    const agent = createAgentExecutor(sequence, []);
+    const automation = createCompletionAutomationExecutor(sequence, [
+      {
+        result: 'accept',
+        message: 'Created PR https://github.com/example/repo/pull/123',
+      },
+    ]);
+
+    const outcome = await runRalphLoop(
+      {
+        staticChecks: ['pnpm gatecheck check'],
+        completion: 'draft-pr',
+        autofix: 'ci',
+        mergeCondition: { enabled: true, approved: false },
+        review: false,
+      },
+      createRalphLoopState(),
+      commands.execute,
+      agent.execute,
+      undefined,
+      {
+        executeCompletionAutomation: automation.execute,
+      },
+    );
+
+    expect(sequence).toEqual([
+      'command:pnpm gatecheck check',
+      'command:git diff --quiet --exit-code',
+      'command:git diff --cached --quiet --exit-code',
+      'command:test -z "$(git ls-files --others --exclude-standard)"',
+      'automation:draft-pr',
+      `command:${PR_VERIFY_URL_COMMAND}`,
+      `command:${DRAFT_PR_VERIFY_COMMAND}`,
+      `command:${CI_WATCH_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
+      `command:${PR_READY_FOR_REVIEW_COMMAND}`,
       `command:${CI_MERGE_COMMAND}`,
     ]);
     expect(outcome.result.kind).toBe('completed');
@@ -1207,7 +1268,8 @@ describe('runRalphLoop', () => {
       { code: 0 },
       { code: 0 },
       { code: 0 },
-      { code: 1, stdout: 'no CI checks reported on this PR' },
+      { code: 0, stdout: '' },
+      { code: 0 },
     ]);
     const agent = createAgentExecutor(sequence, []);
     const automation = createCompletionAutomationExecutor(sequence, [
@@ -1222,7 +1284,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'ci',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       },
       createRalphLoopState(),
@@ -1243,13 +1305,10 @@ describe('runRalphLoop', () => {
       `command:${PR_VERIFY_URL_COMMAND}`,
       `command:${PR_VERIFY_READY_COMMAND}`,
       `command:${CI_WATCH_COMMAND}`,
-      `command:${CI_ASSERT_HAS_CHECKS_COMMAND}`,
+      `command:${CI_ASSERT_NO_BLOCKING_CHECKS_COMMAND}`,
+      `command:${CI_MERGE_COMMAND}`,
     ]);
-    expect(outcome.result.kind).toBe('continue');
-    if (outcome.result.kind !== 'continue') {
-      throw new Error('expected continue');
-    }
-    expect(outcome.result.reason).toBe('merge-condition-failed');
+    expect(outcome.result.kind).toBe('completed');
   });
 
   test('passed review and acceptance criteria are reused after a completion failure', async () => {
@@ -1303,7 +1362,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'all requirements are met',
       },
@@ -1317,7 +1376,7 @@ describe('runRalphLoop', () => {
         staticChecks: ['pnpm gatecheck check'],
         completion: 'pr',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: true,
         acceptanceCriteria: 'all requirements are met',
       },
@@ -1347,7 +1406,7 @@ describe('runRalphLoop', () => {
       kind: 'completed',
       completion: 'pr',
       autofix: 'none',
-      mergeCondition: 'none',
+      mergeCondition: { enabled: false },
       staticChecks: [
         {
           command: 'pnpm gatecheck check',

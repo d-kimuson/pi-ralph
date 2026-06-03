@@ -1,4 +1,9 @@
-import type { RalphLoopOutcome, RalphLoopParams, RalphLoopState } from './ralphLoop.service.ts';
+import {
+  createRalphLoopState,
+  type RalphLoopOutcome,
+  type RalphLoopParams,
+  type RalphLoopState,
+} from './ralphLoop.service.ts';
 
 export type ActiveRalphLoop = {
   readonly params: RalphLoopParams;
@@ -32,14 +37,7 @@ export const createActiveRalphLoop = (
     kind: 'configured',
     activeLoop: {
       params,
-      state: {
-        review: {
-          status: 'pending',
-        },
-        acceptanceCriteria: {
-          status: 'pending',
-        },
-      },
+      state: createRalphLoopState(),
     },
   };
 };

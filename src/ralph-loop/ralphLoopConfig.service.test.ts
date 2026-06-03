@@ -13,7 +13,7 @@ describe('ralphLoopConfig.service', () => {
         staticChecks: [],
         completion: 'pr',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: false,
       }),
     ).toBe(true);
@@ -22,28 +22,28 @@ describe('ralphLoopConfig.service', () => {
         staticChecks: [],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: false,
       }),
     ).toBe(false);
     expect(
       requiresGitHubCli({
         staticChecks: [],
-        completion: 'draft-pr',
-        autofix: 'comment',
-        mergeCondition: 'none',
+        completion: 'edit-only',
+        autofix: 'none',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       }),
     ).toBe(true);
   });
 
-  test('rejects autofix and merge automation without PR completion', () => {
+  test('rejects invalid completion and merge automation combinations', () => {
     expect(
       validateRalphLoopParams({
         staticChecks: [],
         completion: 'edit-only',
         autofix: 'ci',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         review: false,
       }),
     ).toEqual({
@@ -55,24 +55,36 @@ describe('ralphLoopConfig.service', () => {
         staticChecks: [],
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       }),
     ).toEqual({
       kind: 'invalid',
-      message: 'mergeCondition requires completion=pr or completion=draft-pr.',
+      message: 'mergeCondition.enabled=true requires completion=pr or completion=draft-pr.',
+    });
+    expect(
+      validateRalphLoopParams({
+        staticChecks: [],
+        completion: 'draft-pr',
+        autofix: 'none',
+        mergeCondition: { enabled: true, approved: true },
+        review: false,
+      }),
+    ).toEqual({
+      kind: 'invalid',
+      message:
+        'completion=draft-pr with mergeCondition.enabled=true requires autofix=ci or autofix=comment.',
     });
     expect(
       validateRalphLoopParams({
         staticChecks: [],
         completion: 'pr',
         autofix: 'none',
-        mergeCondition: 'approved',
+        mergeCondition: { enabled: true, approved: false },
         review: false,
       }),
     ).toEqual({
-      kind: 'invalid',
-      message: 'mergeCondition requires autofix=ci or autofix=comment.',
+      kind: 'valid',
     });
   });
 
@@ -80,15 +92,16 @@ describe('ralphLoopConfig.service', () => {
     expect(
       buildConfigurationGuidance({
         staticChecks: [],
-        completion: 'pr',
+        completion: 'draft-pr',
         autofix: 'comment',
-        mergeCondition: 'fix-completed',
+        mergeCondition: { enabled: true, approved: true },
         review: false,
       }),
     ).toEqual([
-      'completion: pr is set, so set-ralph-loop will create or update a ready PR after commit cleanliness checks pass. You must create and switch to a non-default working branch yourself before starting; ralph-package does not create branches for you.',
-      'autofix: comment is set, so set-ralph-loop will wait for PR CI, then check unresolved PR comments and keep the task open for the agent to address them. It will not merge by itself unless mergeCondition requests it.',
-      'mergeCondition: fix-completed is set, so set-ralph-loop will merge after the configured autofix checks pass.',
+      'completion: draft-pr is set, so set-ralph-loop will create or update a draft PR after commit cleanliness checks pass. You must create and switch to a non-default working branch yourself before starting; ralph-package does not create branches for you.',
+      'autofix: comment is set, so set-ralph-loop will handle PR CI first when present, then keep the task open for the agent to address unresolved PR comments before merge can continue.',
+      'mergeCondition: enabled=true, approved=true is set, so set-ralph-loop will wait until GitHub reports the PR review decision as APPROVED after the configured autofix flow completes, then merge.',
+      'completion: draft-pr is combined with merge automation, so set-ralph-loop will automatically mark the draft PR as ready for review before waiting for approval or merging.',
     ]);
   });
 });

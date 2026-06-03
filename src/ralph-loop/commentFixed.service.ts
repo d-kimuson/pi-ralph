@@ -1,7 +1,7 @@
 import type {
+  RalphLoopAutofixDetails,
   RalphLoopCommandResult,
   RalphLoopExecutor,
-  RalphLoopMergeConditionDetails,
   RalphLoopPendingComment,
 } from './ralphLoop.service.ts';
 
@@ -96,7 +96,7 @@ const toTime = (value: string): number => new Date(value).getTime();
 
 export const findPendingCommentFixes = (
   snapshot: CommentFixedSnapshot,
-): RalphLoopMergeConditionDetails => {
+): RalphLoopAutofixDetails => {
   const lastAuthorIssueReplyTime = Math.max(
     -Infinity,
     ...snapshot.issueComments
@@ -168,7 +168,7 @@ export const findPendingCommentFixes = (
 };
 
 export const buildCommentFixedCheckResult = (
-  details: RalphLoopMergeConditionDetails,
+  details: RalphLoopAutofixDetails,
 ): RalphLoopCommandResult => ({
   command: COMMENT_FIXED_INSPECT_COMMAND,
   code: details.pendingComments.length === 0 ? 0 : 1,
@@ -390,7 +390,7 @@ export const runCommentFixedCheck = async (
   execute: RalphLoopExecutor,
 ): Promise<{
   readonly results: readonly RalphLoopCommandResult[];
-  readonly details: RalphLoopMergeConditionDetails;
+  readonly details: RalphLoopAutofixDetails;
 }> => {
   const repoResult = await execute(REPO_SLUG_COMMAND);
 

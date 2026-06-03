@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createPresetCommandConfiguration,
+  createRalphLoopFollowUpText,
   normalizePresetRequirement,
-  parseRalphLoopArgs,
 } from '../../extensions/ralph-loop-commands.ts';
 
 type PresetCommandName = Parameters<typeof createPresetCommandConfiguration>[2];
@@ -22,35 +22,41 @@ const presetCommandCases = [
       staticChecks: ['pnpm typecheck'],
       completion: 'edit-only',
       autofix: 'none',
-      mergeCondition: 'none',
+      mergeCondition: {
+        enabled: false,
+      },
       review: false,
-      qa: false,
-      acceptanceCriteria: undefined,
+      acceptanceCriteria: '  --review ほげほげ機能の実装  ',
     },
   },
   {
     commandName: 'ralph-pr',
-    expectedNotification: 'ralph-pr: draft PR with review, QA, CI, and comment follow-up',
+    expectedNotification:
+      'ralph-pr: draft PR with review, acceptance checks, CI, and comment follow-up',
     expectedParams: {
       staticChecks: ['pnpm typecheck'],
       completion: 'draft-pr',
       autofix: 'comment',
-      mergeCondition: 'none',
+      mergeCondition: {
+        enabled: false,
+      },
       review: true,
-      qa: true,
       acceptanceCriteria: '  --review ほげほげ機能の実装  ',
     },
   },
   {
     commandName: 'ralph-delegate',
-    expectedNotification: 'ralph-delegate: ready PR with review, QA, autofix, and merge',
+    expectedNotification:
+      'ralph-delegate: ready PR with review, acceptance checks, autofix, and merge',
     expectedParams: {
       staticChecks: ['pnpm typecheck'],
       completion: 'pr',
       autofix: 'comment',
-      mergeCondition: 'fix-completed',
+      mergeCondition: {
+        enabled: true,
+        approved: false,
+      },
       review: true,
-      qa: true,
       acceptanceCriteria: '  --review ほげほげ機能の実装  ',
     },
   },
@@ -81,17 +87,22 @@ describe('createPresetCommandConfiguration', () => {
   );
 });
 
-describe('parseRalphLoopArgs', () => {
-  test('keeps strict option parsing for /ralph-loop', () => {
-    expect(parseRalphLoopArgs('--review --qa ほげほげ機能の実装')).toEqual({
-      staticChecks: [],
-      completion: undefined,
-      autofix: undefined,
-      mergeCondition: undefined,
-      review: true,
-      qa: true,
-      acceptanceCriteria: undefined,
-      requirement: 'ほげほげ機能の実装',
-    });
+describe('createRalphLoopFollowUpText', () => {
+  test('builds a natural-language handoff for /ralph-loop', () => {
+    expect(
+      createRalphLoopFollowUpText('--merge approved ほげほげ機能の実装', {
+        staticChecks: ['pnpm typecheck', 'pnpm test'],
+      }),
+    ).toContain('Interpret the request below and resolve one set of set-ralph-loop parameters.');
+    expect(
+      createRalphLoopFollowUpText('--merge approved ほげほげ機能の実装', {
+        staticChecks: ['pnpm typecheck', 'pnpm test'],
+      }),
+    ).toContain('Do not stop after configuration.');
+    expect(
+      createRalphLoopFollowUpText('--merge approved ほげほげ機能の実装', {
+        staticChecks: ['pnpm typecheck', 'pnpm test'],
+      }),
+    ).toContain('Request: --merge approved ほげほげ機能の実装');
   });
 });

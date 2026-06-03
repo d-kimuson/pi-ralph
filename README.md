@@ -2,7 +2,7 @@
 
 `@kimuson/pi-ralph` is a pi package for running a configurable **ralph-loop** inside [`pi-coding-agent`](https://github.com/earendil-works/pi-coding-agent).
 
-It is not just a single “run tests before finishing” hook. It is a delivery loop for coding-agent work: static verification, AI review, acceptance/QA checks, pull request automation, CI/comment follow-up, and optional merge automation can be composed into one self-running workflow.
+It is not just a single “run tests before finishing” hook. It is a delivery loop for coding-agent work: static verification, AI review, acceptance checks, pull request automation, CI/comment follow-up, and optional merge automation can be composed into one self-running workflow.
 
 The goal is to let an agent continue from implementation to GitHub delivery without repeatedly blocking on a human for routine verification steps.
 
@@ -38,7 +38,9 @@ For GitHub PR, CI, comment, or merge workflows, the repository must be usable wi
 
 ## Main commands
 
-Preset commands (`/ralph-check`, `/ralph-pr`, `/ralph-delegate`) treat all trailing text as freeform requirement text and forward it to the agent without CLI-style option parsing. CLI-style option parsing is only done by `/ralph-loop`.
+Preset commands (`/ralph-check`, `/ralph-pr`, `/ralph-delegate`) treat all trailing text as freeform requirement text and forward it to the agent without CLI-style option parsing.
+
+`/ralph-loop` is also freeform now, but unlike the presets it does **not** hardcode the final `set-ralph-loop` payload. Instead, it asks the agent to interpret the request, resolve safe defaults, call `set-ralph-loop` once, and then continue the actual task work.
 
 ### `/ralph-check`
 
@@ -53,9 +55,9 @@ Preset:
 ```yaml
 completion: edit-only
 autofix: none
-mergeCondition: none
+mergeCondition:
+  enabled: false
 review: false
-qa: false
 ```
 
 ### `/ralph-pr`
@@ -71,9 +73,10 @@ Preset:
 ```yaml
 completion: draft-pr
 autofix: comment
-mergeCondition: none
+mergeCondition:
+  enabled: false
 review: true
-qa: true
+acceptanceCriteria: inferred from the requirement when possible
 ```
 
 ### `/ralph-delegate`
@@ -89,31 +92,33 @@ Preset:
 ```yaml
 completion: pr
 autofix: comment
-mergeCondition: fix-completed
+mergeCondition:
+  enabled: true
+  approved: false
 review: true
-qa: true
+acceptanceCriteria: inferred from the requirement when possible
 ```
 
 ### `/ralph-loop`
 
-Low-level command for custom combinations.
+Natural-language entrypoint for custom combinations.
 
 Use this when the presets are not enough:
 
 ```text
-/ralph-loop --completion pr --autofix ci --merge approved --review --qa "Implement user login"
+/ralph-loop After CI passes and PR approval is present, merge automatically. Review the code too.
 ```
 
-Common options:
+`/ralph-loop` may still receive old CLI-like text such as `--autofix comment --merge approved`, but that text is no longer machine-parsed by the command itself. The agent reads the request, infers structured parameters, calls `set-ralph-loop` once, and keeps working.
 
-```text
---completion edit-only|draft-pr|pr
---autofix none|ci|comment
---merge none|fix-completed|approved
---review
---qa
---static-check <command>
---acceptance <text>
+Safe defaults for unspecified settings:
+
+```yaml
+completion: edit-only
+autofix: none
+mergeCondition:
+  enabled: false
+review: false
 ```
 
 ## Option model
@@ -130,25 +135,46 @@ Controls what artifact ralph-loop should produce after static and AI checks pass
 
 ### Autofix
 
-Controls whether ralph-loop should keep the task open for PR feedback.
+Controls how ralph-loop should keep the task open for PR feedback.
 
-| Mode      | Behavior                                                        |
-| --------- | --------------------------------------------------------------- |
-| `none`    | Do not wait for CI or comments                                  |
-| `ci`      | Wait for PR CI and keep the loop open for failed/pending checks |
-| `comment` | Run CI follow-up, then check unresolved PR comments             |
+| Mode      | Behavior                                                                |
+| --------- | ----------------------------------------------------------------------- |
+| `none`    | Do not perform PR follow-up                                             |
+| `ci`      | Reopen the task when PR CI is unresolved so the agent can fix it        |
+| `comment` | Handle PR CI first when present, then reopen for unresolved PR comments |
 
-`autofix` does not magically patch code by itself. It reports the failing CI/comment state back into the agent loop so the agent can continue working until the checks pass.
+`autofix` does not magically patch code by itself. It reports failing CI/comment state back into the agent loop so the agent can continue working until the checks pass.
+
+If no CI checks exist, `autofix: ci` becomes a no-op and `autofix: comment` may still proceed to comment follow-up.
 
 ### Merge condition
 
 Controls whether and when ralph-loop should merge the PR.
 
-| Condition       | Behavior                                                     |
-| --------------- | ------------------------------------------------------------ |
-| `none`          | Never merge automatically                                    |
-| `fix-completed` | Merge after the configured `autofix` checks pass             |
-| `approved`      | Wait for PR approval after `autofix` checks pass, then merge |
+```yaml
+mergeCondition:
+  enabled: false
+```
+
+Never merge automatically.
+
+```yaml
+mergeCondition:
+  enabled: true
+  approved: false
+```
+
+Merge automatically after the configured `autofix` flow completes.
+
+```yaml
+mergeCondition:
+  enabled: true
+  approved: true
+```
+
+Wait for GitHub PR approval after the configured `autofix` flow completes, then merge.
+
+When `completion: draft-pr` is combined with `mergeCondition.enabled: true`, ralph-loop automatically marks the draft PR as **Ready for review** before waiting for approval or merging.
 
 ## Typical workflows
 
@@ -173,14 +199,14 @@ Controls whether and when ralph-loop should merge the PR.
 ### Require approval before merge
 
 ```text
-/ralph-loop --completion pr --autofix comment --merge approved --review --qa "Implement billing export"
+/ralph-loop After comment follow-up and PR approval, merge the PR automatically. Review the implementation too.
 ```
 
 ## How it works
 
-The package registers pi commands and tools. User-facing commands such as `/ralph-check`, `/ralph-pr`, and `/ralph-delegate` translate presets into a `set-ralph-loop` configuration while forwarding their trailing text to the agent as freeform requirement text. `/ralph-loop` remains the low-level command with explicit option parsing. Once configured, the loop runs from pi's task-completion lifecycle and sends feedback back into the agent when a phase fails.
+The package registers pi commands and tools. User-facing preset commands such as `/ralph-check`, `/ralph-pr`, and `/ralph-delegate` translate presets into an exact `set-ralph-loop` configuration while forwarding their trailing text to the agent as freeform requirement text. `/ralph-loop` now sends a natural-language handoff that asks the agent to interpret the request, resolve safe defaults and dependencies, call `set-ralph-loop` once, and then continue the actual task work.
 
-Internally, ralph-loop is stateful: passed review and acceptance checks are reused on later retries, while failed static checks, PR checks, CI, comments, or merge conditions keep the task open until the agent fixes them or the loop is explicitly bypassed.
+Internally, ralph-loop is stateful: passed review and acceptance checks are reused on later retries, while failed static checks, PR checks, autofix follow-up, or merge conditions keep the task open until the agent fixes them or the loop is explicitly bypassed.
 
 The internal review/completion agents relaunch the `pi` CLI. If you run pi-ralph inside an embedded SDK host and need to force a specific CLI path, set `PI_RALPH_PI_CLI_PATH=/absolute/path/to/pi`.
 

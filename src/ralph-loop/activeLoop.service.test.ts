@@ -13,7 +13,7 @@ describe('activeLoop.service', () => {
     staticChecks: ['pnpm gatecheck check'],
     completion: 'edit-only' as const,
     autofix: 'none' as const,
-    mergeCondition: 'none' as const,
+    mergeCondition: { enabled: false } as const,
     review: true,
     acceptanceCriteria: 'all requirements are met',
   };
@@ -64,13 +64,14 @@ describe('activeLoop.service', () => {
         acceptanceCriteria: {
           status: 'pending',
         },
+        phase: 'idle',
       },
       result: {
         kind: 'continue',
         reason: 'static-check-failed',
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         staticChecks: [],
         agentChecks: [],
         completionChecks: [],
@@ -83,7 +84,7 @@ describe('activeLoop.service', () => {
         kind: 'completed',
         completion: 'edit-only',
         autofix: 'none',
-        mergeCondition: 'none',
+        mergeCondition: { enabled: false },
         staticChecks: [],
         agentChecks: [],
         completionChecks: [],
@@ -100,6 +101,7 @@ describe('activeLoop.service', () => {
         acceptanceCriteria: {
           status: 'pending',
         },
+        phase: 'idle',
       },
     });
     expect(afterCompleted).toBeUndefined();

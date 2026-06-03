@@ -1,13 +1,18 @@
-import type { RalphLoopParams } from './ralphLoop.service.ts';
+import { type RalphLoopMergeCondition, type RalphLoopParams } from './ralphLoop.service.ts';
 
 export const isPullRequestCompletion = (
   completion: RalphLoopParams['completion'],
 ): completion is 'pr' | 'draft-pr' => completion === 'pr' || completion === 'draft-pr';
 
+const isMergeAutomationEnabled = (
+  mergeCondition: RalphLoopMergeCondition,
+): mergeCondition is Extract<RalphLoopMergeCondition, { readonly enabled: true }> =>
+  mergeCondition.enabled;
+
 export const requiresGitHubCli = (params: RalphLoopParams): boolean =>
   isPullRequestCompletion(params.completion) ||
   params.autofix !== 'none' ||
-  params.mergeCondition !== 'none';
+  isMergeAutomationEnabled(params.mergeCondition);
 
 export const validateRalphLoopParams = (
   params: RalphLoopParams,
@@ -27,18 +32,23 @@ export const validateRalphLoopParams = (
       };
     }
 
-    if (params.mergeCondition !== 'none') {
+    if (isMergeAutomationEnabled(params.mergeCondition)) {
       return {
         kind: 'invalid',
-        message: 'mergeCondition requires completion=pr or completion=draft-pr.',
+        message: 'mergeCondition.enabled=true requires completion=pr or completion=draft-pr.',
       };
     }
   }
 
-  if (params.mergeCondition !== 'none' && params.autofix === 'none') {
+  if (
+    params.completion === 'draft-pr' &&
+    isMergeAutomationEnabled(params.mergeCondition) &&
+    params.autofix === 'none'
+  ) {
     return {
       kind: 'invalid',
-      message: 'mergeCondition requires autofix=ci or autofix=comment.',
+      message:
+        'completion=draft-pr with mergeCondition.enabled=true requires autofix=ci or autofix=comment.',
     };
   }
 
@@ -70,25 +80,31 @@ export const buildConfigurationGuidance = (params: RalphLoopParams): readonly st
 
   if (params.autofix === 'ci') {
     guidance.push(
-      'autofix: ci is set, so set-ralph-loop will wait for PR CI and keep the task open for the agent to fix failed or pending checks. It will not merge by itself unless mergeCondition requests it.',
+      'autofix: ci is set, so set-ralph-loop will keep the task open for the agent to fix unresolved PR CI when needed. If no CI checks exist, this mode becomes a no-op.',
     );
   }
 
   if (params.autofix === 'comment') {
     guidance.push(
-      'autofix: comment is set, so set-ralph-loop will wait for PR CI, then check unresolved PR comments and keep the task open for the agent to address them. It will not merge by itself unless mergeCondition requests it.',
+      'autofix: comment is set, so set-ralph-loop will handle PR CI first when present, then keep the task open for the agent to address unresolved PR comments before merge can continue.',
     );
   }
 
-  if (params.mergeCondition === 'fix-completed') {
+  if (isMergeAutomationEnabled(params.mergeCondition) && !params.mergeCondition.approved) {
     guidance.push(
-      'mergeCondition: fix-completed is set, so set-ralph-loop will merge after the configured autofix checks pass.',
+      'mergeCondition: enabled=true, approved=false is set, so set-ralph-loop will merge automatically after the configured autofix flow completes.',
     );
   }
 
-  if (params.mergeCondition === 'approved') {
+  if (isMergeAutomationEnabled(params.mergeCondition) && params.mergeCondition.approved) {
     guidance.push(
-      'mergeCondition: approved is set, so set-ralph-loop will wait until GitHub reports the PR review decision as APPROVED after the configured autofix checks pass, then merge.',
+      'mergeCondition: enabled=true, approved=true is set, so set-ralph-loop will wait until GitHub reports the PR review decision as APPROVED after the configured autofix flow completes, then merge.',
+    );
+  }
+
+  if (params.completion === 'draft-pr' && isMergeAutomationEnabled(params.mergeCondition)) {
+    guidance.push(
+      'completion: draft-pr is combined with merge automation, so set-ralph-loop will automatically mark the draft PR as ready for review before waiting for approval or merging.',
     );
   }
 
