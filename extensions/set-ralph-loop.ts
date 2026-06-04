@@ -20,6 +20,7 @@ import {
   runCompletionAutomation,
   type RunCompletionAutomationOptions,
 } from '../src/ralph-loop/completionAutomationRunner.service.ts';
+import { executeLocalShellCommand } from '../src/ralph-loop/localShellExecutor.service.ts';
 import { loadPullRequestTemplate } from '../src/ralph-loop/pullRequestTemplate.service.ts';
 import {
   runRalphLoop,
@@ -57,24 +58,16 @@ const createSessionKey = (cwd: string, sessionId: string): string =>
   });
 
 const executeShellCommand = async (
-  pi: ExtensionAPI,
   cwd: string,
   signal: AbortSignal | undefined,
   command: string,
-): Promise<RalphLoopCommandResult> => {
-  const result = await pi.exec('bash', ['-lc', command], {
+): Promise<RalphLoopCommandResult> =>
+  await executeLocalShellCommand({
     cwd,
     signal,
-    timeout: TOOL_TIMEOUT_MS,
-  });
-
-  return {
     command,
-    code: result.code,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
-};
+    timeoutMs: TOOL_TIMEOUT_MS,
+  });
 
 const lastCommand = (
   results: readonly RalphLoopCommandResult[] | undefined,
@@ -234,15 +227,10 @@ const createCompletionAutomationOptions = (
 });
 
 const ensureGitHubCliAvailable = async (
-  pi: ExtensionAPI,
   cwd: string,
   signal: AbortSignal | undefined,
 ): Promise<void> => {
-  const result = await pi.exec('bash', ['-lc', 'command -v gh >/dev/null 2>&1'], {
-    cwd,
-    signal,
-    timeout: TOOL_TIMEOUT_MS,
-  });
+  const result = await executeShellCommand(cwd, signal, 'command -v gh >/dev/null 2>&1');
 
   if (result.code !== 0) {
     throw new Error('GitHub CLI (gh) is required for the configured PR or merge automation.');
@@ -250,33 +238,23 @@ const ensureGitHubCliAvailable = async (
 };
 
 const getCurrentBranch = async (
-  pi: ExtensionAPI,
   cwd: string,
   signal: AbortSignal | undefined,
 ): Promise<string | undefined> => {
-  const result = await pi.exec('bash', ['-lc', 'git branch --show-current'], {
-    cwd,
-    signal,
-    timeout: TOOL_TIMEOUT_MS,
-  });
+  const result = await executeShellCommand(cwd, signal, 'git branch --show-current');
   const branch = result.stdout.trim();
 
   return result.code === 0 && branch !== '' ? branch : undefined;
 };
 
 const getDefaultBranch = async (
-  pi: ExtensionAPI,
   cwd: string,
   signal: AbortSignal | undefined,
 ): Promise<string | undefined> => {
-  const gitResult = await pi.exec(
-    'bash',
-    ['-lc', "git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##'"],
-    {
-      cwd,
-      signal,
-      timeout: TOOL_TIMEOUT_MS,
-    },
+  const gitResult = await executeShellCommand(
+    cwd,
+    signal,
+    "git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##'",
   );
   const gitBranch = gitResult.stdout.trim();
 
@@ -284,14 +262,10 @@ const getDefaultBranch = async (
     return gitBranch;
   }
 
-  const ghResult = await pi.exec(
-    'bash',
-    ['-lc', 'gh repo view --json defaultBranchRef --jq .defaultBranchRef.name'],
-    {
-      cwd,
-      signal,
-      timeout: TOOL_TIMEOUT_MS,
-    },
+  const ghResult = await executeShellCommand(
+    cwd,
+    signal,
+    'gh repo view --json defaultBranchRef --jq .defaultBranchRef.name',
   );
   const ghBranch = ghResult.stdout.trim();
 
@@ -299,7 +273,6 @@ const getDefaultBranch = async (
 };
 
 const ensureNotOnDefaultBranchForPullRequestCompletion = async (
-  pi: ExtensionAPI,
   cwd: string,
   signal: AbortSignal | undefined,
   params: RalphLoopParams,
@@ -308,8 +281,8 @@ const ensureNotOnDefaultBranchForPullRequestCompletion = async (
     return;
   }
 
-  const currentBranch = await getCurrentBranch(pi, cwd, signal);
-  const defaultBranch = await getDefaultBranch(pi, cwd, signal);
+  const currentBranch = await getCurrentBranch(cwd, signal);
+  const defaultBranch = await getDefaultBranch(cwd, signal);
 
   if (
     currentBranch === undefined ||
@@ -347,13 +320,15 @@ const runConfiguredLoop = async (
     notifyProgress('set-ralph-loop: running static checks...', ctx);
 
     const pullRequestTemplate = isPullRequestCompletion(advanced.params.completion)
-      ? await loadPullRequestTemplate(pi.exec.bind(pi), ctx.cwd, ctx.signal)
+      ? await loadPullRequestTemplate(() =>
+          executeShellCommand(ctx.cwd, ctx.signal, 'git rev-parse --show-toplevel'),
+        )
       : undefined;
 
     const outcome = await runRalphLoop(
       advanced.params,
       advanced.state,
-      async (command) => executeShellCommand(pi, ctx.cwd, ctx.signal, command),
+      async (command) => executeShellCommand(ctx.cwd, ctx.signal, command),
       async (request) =>
         runAgentCheck(pi.exec.bind(pi), ctx.cwd, ctx.signal, request, createAgentCheckOptions(ctx)),
       {
@@ -500,7 +475,7 @@ const createConfigurationResponseText = (params: RalphLoopParams): string => {
   ].join('\n\n');
 };
 
-const createSetRalphLoopTool = (pi: ExtensionAPI) =>
+const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
   defineTool({
     name: 'set-ralph-loop',
     label: 'Set Ralph Loop',
@@ -577,15 +552,10 @@ const createSetRalphLoopTool = (pi: ExtensionAPI) =>
       }
 
       if (requiresGitHubCli(normalizedParams)) {
-        await ensureGitHubCliAvailable(pi, ctx.cwd, ctx.signal);
+        await ensureGitHubCliAvailable(ctx.cwd, ctx.signal);
       }
 
-      await ensureNotOnDefaultBranchForPullRequestCompletion(
-        pi,
-        ctx.cwd,
-        ctx.signal,
-        normalizedParams,
-      );
+      await ensureNotOnDefaultBranchForPullRequestCompletion(ctx.cwd, ctx.signal, normalizedParams);
 
       const sessionKey = createSessionKey(ctx.cwd, ctx.sessionManager.getSessionId());
       const configured = createActiveRalphLoop(

@@ -27,15 +27,12 @@ describe('loadPullRequestTemplate', () => {
     await mkdir(templateDirectory, { recursive: true });
     await writeFile(templatePath, '## Summary\n\n- item', 'utf8');
 
-    const template = await loadPullRequestTemplate(
-      () =>
-        Promise.resolve({
-          code: 0,
-          stdout: `${root}\n`,
-          stderr: '',
-        }),
-      root,
-      undefined,
+    const template = await loadPullRequestTemplate(() =>
+      Promise.resolve({
+        code: 0,
+        stdout: `${root}\n`,
+        stderr: '',
+      }),
     );
 
     expect(template).toEqual({
@@ -48,15 +45,12 @@ describe('loadPullRequestTemplate', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ralph-loop-pr-template-'));
     directories.push(root);
 
-    const template = await loadPullRequestTemplate(
-      () =>
-        Promise.resolve({
-          code: 0,
-          stdout: `${root}\n`,
-          stderr: '',
-        }),
-      root,
-      undefined,
+    const template = await loadPullRequestTemplate(() =>
+      Promise.resolve({
+        code: 0,
+        stdout: `${root}\n`,
+        stderr: '',
+      }),
     );
 
     expect(template).toBeUndefined();
