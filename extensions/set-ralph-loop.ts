@@ -98,6 +98,251 @@ const emitProgressLog = (pi: ExtensionAPI, content: string): void => {
   );
 };
 
+// ============ Status Widget ============
+
+type WidgetStepStatus = 'pending' | 'in-progress' | 'passed' | 'failed';
+
+type WidgetStep = {
+  readonly id: string;
+  label: string;
+  status: WidgetStepStatus;
+  detail?: string;
+  description?: string;
+  readonly commands?: readonly string[];
+};
+
+const stepIcon = (status: WidgetStepStatus): { readonly icon: string; readonly color: string } => {
+  switch (status) {
+    case 'pending':
+      return { icon: '◯', color: 'muted' };
+    case 'in-progress':
+      return { icon: '◎', color: 'accent' };
+    case 'passed':
+      return { icon: '●', color: 'success' };
+    case 'failed':
+      return { icon: '✕', color: 'error' };
+  }
+};
+
+const themedIcon = (status: WidgetStepStatus, theme: ExtensionContext['ui']['theme']): string => {
+  const { icon, color } = stepIcon(status);
+
+  switch (color) {
+    case 'muted':
+      return theme.fg('muted', icon);
+    case 'accent':
+      return theme.fg('accent', icon);
+    case 'success':
+      return theme.fg('success', icon);
+    case 'error':
+      return theme.fg('error', icon);
+  }
+};
+
+const stepLabelColor = (status: WidgetStepStatus): 'dim' | 'text' =>
+  status === 'pending' ? 'dim' : 'text';
+
+const detailForStatus = (step: WidgetStep): string | undefined => {
+  if (step.detail !== undefined) {
+    return step.detail;
+  }
+
+  switch (step.id) {
+    case 'review': {
+      switch (step.status) {
+        case 'in-progress':
+          return 'checking…';
+        case 'passed':
+          return 'fixed';
+        case 'failed':
+          return 'rejected';
+        default:
+          return undefined;
+      }
+    }
+    case 'acceptance-criteria': {
+      switch (step.status) {
+        case 'in-progress':
+          return 'checking…';
+        case 'passed':
+          return 'passed';
+        case 'failed':
+          return 'rejected';
+        default:
+          return undefined;
+      }
+    }
+    case 'ci-passed': {
+      switch (step.status) {
+        case 'in-progress':
+          return 'waiting…';
+        case 'passed':
+          return 'passed';
+        case 'failed':
+          return 'failed';
+        default:
+          return undefined;
+      }
+    }
+    case 'review-fixed': {
+      switch (step.status) {
+        case 'in-progress':
+          return 'checking…';
+        case 'passed':
+          return 'resolved';
+        case 'failed':
+          return 'unresolved';
+        default:
+          return undefined;
+      }
+    }
+    case 'pr-created': {
+      switch (step.status) {
+        case 'in-progress':
+          return 'creating…';
+        case 'passed':
+          return 'created';
+        default:
+          return undefined;
+      }
+    }
+    case 'merge': {
+      switch (step.status) {
+        case 'in-progress':
+          return 'merging…';
+        case 'passed':
+          return 'merged';
+        default:
+          return undefined;
+      }
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const computeWidgetSteps = (params: RalphLoopParams): WidgetStep[] => {
+  const steps: WidgetStep[] = [
+    {
+      id: 'static-checks',
+      label: 'static-checks',
+      status: 'pending',
+      commands: params.staticChecks.length > 0 ? params.staticChecks : undefined,
+    },
+  ];
+
+  if (params.review) {
+    steps.push({ id: 'review', label: 'review', status: 'pending' });
+  }
+
+  if (params.acceptanceCriteria !== undefined) {
+    steps.push({
+      id: 'acceptance-criteria',
+      label: 'acceptance-criteria',
+      status: 'pending',
+      description: params.acceptanceCriteria,
+    });
+  }
+
+  if (params.completion !== 'edit-only') {
+    steps.push({
+      id: 'completion-checks',
+      label: 'completion-checks',
+      status: 'pending',
+      commands: [
+        'git diff --quiet --exit-code',
+        'git diff --cached --quiet --exit-code',
+        'test -z "$(git ls-files --others --exclude-standard)"',
+      ],
+    });
+    steps.push({ id: 'pr-created', label: 'pr-created', status: 'pending' });
+  }
+
+  if (params.autofix !== 'none') {
+    steps.push({ id: 'ci-passed', label: 'ci', status: 'pending' });
+  }
+
+  if (params.autofix === 'comment') {
+    steps.push({ id: 'review-fixed', label: 'review-fixed', status: 'pending' });
+  }
+
+  if (params.mergeCondition.enabled) {
+    steps.push({ id: 'merge', label: 'merge', status: 'pending' });
+  }
+
+  return steps;
+};
+
+const renderStatusWidget = (ctx: ExtensionContext, widgetSteps: WidgetStep[]): void => {
+  if (!ctx.hasUI) return;
+
+  const theme = ctx.ui.theme;
+  const lines: string[] = [theme.fg('accent', theme.bold('ralph-loop'))];
+
+  for (const step of widgetSteps) {
+    const icon = themedIcon(step.status, theme);
+    const labelColor = stepLabelColor(step.status);
+
+    let line: string;
+
+    if (step.commands !== undefined && step.commands.length > 0) {
+      const cmdList = step.commands.join(', ');
+
+      line = `  ${icon} ${theme.fg(labelColor, `${step.label}:`)} ${theme.fg('dim', cmdList)}`;
+    } else {
+      line = `  ${icon} ${theme.fg(labelColor, step.label)}`;
+    }
+
+    const detailText = detailForStatus(step);
+
+    if (detailText !== undefined) {
+      line += `  ${theme.fg('dim', detailText)}`;
+    }
+
+    lines.push(line);
+
+    // Render description (e.g. acceptance criteria text).
+    if (step.description !== undefined) {
+      lines.push(`       ${theme.fg('dim', step.description)}`);
+    }
+  }
+
+  ctx.ui.setWidget('ralph-loop-status', lines);
+};
+
+const clearStatusWidget = (ctx: ExtensionContext): void => {
+  if (ctx.hasUI) {
+    ctx.ui.setWidget('ralph-loop-status', undefined);
+  }
+};
+
+const initWidgetSteps = (params: RalphLoopParams): WidgetStep[] => {
+  const steps = computeWidgetSteps(params);
+
+  // Static checks always run fresh each time; mark them in-progress.
+  const staticChecksStep = steps.find((s) => s.id === 'static-checks');
+
+  if (staticChecksStep !== undefined) {
+    staticChecksStep.status = 'in-progress';
+  }
+
+  return steps;
+};
+
+const markStepsUpTo = (widgetSteps: WidgetStep[], id: string): void => {
+  for (const step of widgetSteps) {
+    if (step.id === id) {
+      step.status = 'in-progress';
+      return;
+    }
+
+    if (step.status === 'pending') {
+      step.status = 'passed';
+    }
+  }
+};
+
 const summarizeResult = (outcome: RalphLoopOutcome): string => {
   const result = outcome.result;
 
@@ -319,6 +564,27 @@ const runConfiguredLoop = async (
   try {
     notifyProgress('set-ralph-loop: running static checks...', ctx);
 
+    // Initialize the status widget for this run.
+    const widgetSteps = initWidgetSteps(advanced.params);
+
+    if (advanced.state.review.status === 'passed') {
+      const reviewStep = widgetSteps.find((s) => s.id === 'review');
+
+      if (reviewStep !== undefined) {
+        reviewStep.status = 'passed';
+      }
+    }
+
+    if (advanced.state.acceptanceCriteria.status === 'passed') {
+      const acStep = widgetSteps.find((s) => s.id === 'acceptance-criteria');
+
+      if (acStep !== undefined) {
+        acStep.status = 'passed';
+      }
+    }
+
+    renderStatusWidget(ctx, widgetSteps);
+
     const pullRequestTemplate = isPullRequestCompletion(advanced.params.completion)
       ? await loadPullRequestTemplate(() =>
           executeShellCommand(ctx.cwd, ctx.signal, 'git rev-parse --show-toplevel'),
@@ -333,10 +599,29 @@ const runConfiguredLoop = async (
         runAgentCheck(pi.exec.bind(pi), ctx.cwd, ctx.signal, request, createAgentCheckOptions(ctx)),
       {
         onStaticChecksPassed: () => {
+          const scStep = widgetSteps.find((s) => s.id === 'static-checks');
+
+          if (scStep !== undefined) {
+            scStep.status = 'passed';
+          }
+
+          renderStatusWidget(ctx, widgetSteps);
           notifyProgress('set-ralph-loop: static checks passed.', ctx);
           emitProgressLog(pi, '[set-ralph-loop]\n\nStatic checks passed.');
         },
         onReviewStarted: (reused) => {
+          markStepsUpTo(widgetSteps, 'review');
+
+          if (reused) {
+            const reviewStep = widgetSteps.find((s) => s.id === 'review');
+
+            if (reviewStep !== undefined) {
+              reviewStep.status = 'passed';
+              reviewStep.detail = 'passed (reused)';
+            }
+          }
+
+          renderStatusWidget(ctx, widgetSteps);
           notifyProgress(
             reused
               ? 'set-ralph-loop: static checks passed. reusing the passed review result.'
@@ -345,6 +630,18 @@ const runConfiguredLoop = async (
           );
         },
         onAcceptanceCriteriaStarted: (reused) => {
+          markStepsUpTo(widgetSteps, 'acceptance-criteria');
+
+          if (reused) {
+            const acStep = widgetSteps.find((s) => s.id === 'acceptance-criteria');
+
+            if (acStep !== undefined) {
+              acStep.status = 'passed';
+              acStep.detail = 'passed (reused)';
+            }
+          }
+
+          renderStatusWidget(ctx, widgetSteps);
           notifyProgress(
             reused
               ? 'set-ralph-loop: static checks passed. reusing the passed acceptance-criteria result.'
@@ -353,12 +650,16 @@ const runConfiguredLoop = async (
           );
         },
         onCompletionChecksStarted: () => {
+          markStepsUpTo(widgetSteps, 'completion-checks');
+          renderStatusWidget(ctx, widgetSteps);
           notifyProgress(
             'set-ralph-loop: static checks passed. checking completion conditions...',
             ctx,
           );
         },
         onCompletionAutomationStarted: (mode) => {
+          markStepsUpTo(widgetSteps, 'pr-created');
+          renderStatusWidget(ctx, widgetSteps);
           notifyProgress(
             mode === 'pr'
               ? 'set-ralph-loop: commit checks passed. creating or updating the ready PR...'
@@ -367,6 +668,17 @@ const runConfiguredLoop = async (
           );
         },
         onAutofixStarted: (autofix) => {
+          markStepsUpTo(widgetSteps, 'ci-passed');
+
+          if (autofix === 'comment') {
+            const reviewFixedStep = widgetSteps.find((s) => s.id === 'review-fixed');
+
+            if (reviewFixedStep !== undefined) {
+              reviewFixedStep.status = 'in-progress';
+            }
+          }
+
+          renderStatusWidget(ctx, widgetSteps);
           notifyProgress(
             autofix === 'comment'
               ? 'set-ralph-loop: PR automation passed. waiting for CI if present, then checking unresolved PR comments...'
@@ -375,6 +687,9 @@ const runConfiguredLoop = async (
           );
         },
         onMergeConditionStarted: (params) => {
+          markStepsUpTo(widgetSteps, 'merge');
+          renderStatusWidget(ctx, widgetSteps);
+
           if (params.completion === 'draft-pr' && params.mergeCondition.enabled) {
             notifyProgress(
               params.mergeCondition.approved
@@ -413,6 +728,15 @@ const runConfiguredLoop = async (
 
     if (nextActiveLoop === undefined) {
       activeLoopsBySession.delete(sessionKey);
+
+      // Mark all remaining steps as passed and show final state briefly.
+      for (const step of widgetSteps) {
+        if (step.status === 'pending' || step.status === 'in-progress') {
+          step.status = 'passed';
+        }
+      }
+
+      renderStatusWidget(ctx, widgetSteps);
       notifyProgress('set-ralph-loop: all configured checks passed.', ctx);
       pi.sendMessage(
         {
@@ -424,6 +748,42 @@ const runConfiguredLoop = async (
         { triggerTurn: false },
       );
       return;
+    }
+
+    // Loop continues — mark the failing step with detail and keep the widget visible.
+    if (outcome.result.kind === 'continue') {
+      const reasonToStepId: Record<string, string> = {
+        'static-check-failed': 'static-checks',
+        'review-rejected': 'review',
+        'acceptance-criteria-rejected': 'acceptance-criteria',
+        'completion-check-failed': 'completion-checks',
+        'completion-automation-failed': 'pr-created',
+        'autofix-ci-failed': 'ci-passed',
+        'autofix-comment-failed': 'review-fixed',
+        'merge-approval-failed': 'merge',
+        'merge-command-failed': 'merge',
+      };
+
+      const failedStepId = reasonToStepId[outcome.result.reason];
+
+      if (failedStepId !== undefined) {
+        const failedStep = widgetSteps.find((s) => s.id === failedStepId);
+
+        if (failedStep !== undefined) {
+          failedStep.status = 'failed';
+
+          // Set detail text for CI failures from the actual check output.
+          if (failedStepId === 'ci-passed' && outcome.result.autofixChecks !== undefined) {
+            const last = lastMeaningfulOutput(outcome.result.autofixChecks);
+
+            if (last !== undefined && last.length > 0) {
+              failedStep.detail = last.length > 60 ? `${last.slice(0, 57)}…` : last;
+            }
+          }
+        }
+      }
+
+      renderStatusWidget(ctx, widgetSteps);
     }
 
     activeLoopsBySession.set(sessionKey, nextActiveLoop);
@@ -439,6 +799,7 @@ const runConfiguredLoop = async (
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
+    clearStatusWidget(ctx);
     notifyProgress(`set-ralph-loop: automatic checking stopped (${message}).`, ctx);
     pi.sendMessage(
       {
@@ -576,6 +937,11 @@ const createSetRalphLoopTool = (_pi: ExtensionAPI) =>
       }
 
       activeLoopsBySession.set(sessionKey, configured.activeLoop);
+
+      // Show initial widget with all steps pending.
+      const widgetSteps = computeWidgetSteps(normalizedParams);
+
+      renderStatusWidget(ctx, widgetSteps);
       notifyProgress(
         'set-ralph-loop configured. The completion checks will run automatically when the task next tries to finish.',
         ctx,
@@ -636,6 +1002,7 @@ const createBypassRalphLoopTool = () =>
       }
 
       notifyProgress(`bypass-ralph-loop used: ${params.reason}`, ctx);
+      clearStatusWidget(ctx);
 
       return Promise.resolve({
         content: [

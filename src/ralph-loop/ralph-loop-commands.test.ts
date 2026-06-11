@@ -26,7 +26,6 @@ const presetCommandCases = [
         enabled: false,
       },
       review: false,
-      acceptanceCriteria: '  --review ほげほげ機能の実装  ',
     },
   },
   {
@@ -41,7 +40,6 @@ const presetCommandCases = [
         enabled: false,
       },
       review: true,
-      acceptanceCriteria: '  --review ほげほげ機能の実装  ',
     },
   },
   {
@@ -57,7 +55,6 @@ const presetCommandCases = [
         approved: false,
       },
       review: true,
-      acceptanceCriteria: '  --review ほげほげ機能の実装  ',
     },
   },
 ] as const satisfies readonly PresetCommandCase[];

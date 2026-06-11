@@ -114,11 +114,8 @@ const saveDefaultOptions = (cwd: string, options: RalphLoopDefaults): void => {
 // Message helpers
 // ---------------------------------------------------------------------------
 
-const buildAcceptanceCriteriaFromRequirement = (requirement: string): string | undefined =>
-  requirement.trim() === '' ? undefined : requirement;
-
-const buildSetRalphLoopMessage = (params: RalphLoopOptions): string => {
-  const lines: string[] = ['set-ralph-loop:'];
+const buildPresetMessage = (params: Omit<RalphLoopOptions, 'acceptanceCriteria'>): string => {
+  const lines: string[] = ['Preset parameters (use these exactly):'];
 
   if (params.staticChecks.length > 0) {
     lines.push('  staticChecks:');
@@ -140,17 +137,6 @@ const buildSetRalphLoopMessage = (params: RalphLoopOptions): string => {
 
   lines.push(`  review: ${params.review}`);
 
-  if (params.acceptanceCriteria !== undefined) {
-    lines.push('  acceptanceCriteria: |');
-    for (const line of params.acceptanceCriteria.split('\n')) {
-      lines.push(`    ${line}`);
-    }
-  }
-
-  lines.push('');
-  lines.push('Call set-ralph-loop once with these exact parameters to configure done criteria.');
-  lines.push('Then immediately continue the task work. Do not stop after configuration.');
-
   return lines.join('\n');
 };
 
@@ -161,22 +147,31 @@ const sendStructuredConfiguration = (
   pi: ExtensionAPI,
   commandName: string,
   requirement: string,
-  params: RalphLoopOptions,
+  params: Omit<RalphLoopOptions, 'acceptanceCriteria'>,
 ): void => {
-  const message = buildSetRalphLoopMessage(params);
+  const defaultsDisplay =
+    params.staticChecks.length === 0
+      ? '[]'
+      : params.staticChecks.map((c) => JSON.stringify(c)).join(', ');
 
   pi.sendUserMessage(
     [
       {
         type: 'text',
         text: [
-          `The user invoked /${commandName}. Configure the task using set-ralph-loop once with the following parameters.`,
+          `The user invoked /${commandName}.`,
           '',
           `Requirement: ${createDisplayedRequirement(requirement)}`,
           '',
-          message,
+          buildPresetMessage(params),
           '',
-          'Do not ask the user to confirm. Call set-ralph-loop now with these exact parameters, then continue the actual task work.',
+          'For the remaining parameters, infer from the requirement:',
+          `- staticChecks: include any checks explicitly mentioned in the requirement, plus the repository defaults (${defaultsDisplay}).`,
+          '- acceptanceCriteria: derive concrete, verifiable acceptance criteria from the requirement. Focus on behavioral requirements, correctness conditions, and non-deterministic quality aspects. Do NOT include items already covered by staticChecks (e.g. lint, typecheck, test commands). Formulate clear pass/fail conditions.',
+          '',
+          'Call set-ralph-loop once with the resolved parameters.',
+          'Then immediately continue the task work. Do not stop after configuration.',
+          'Do not ask the user to confirm.',
         ].join('\n'),
       },
     ],
@@ -199,7 +194,7 @@ export const createRalphLoopFollowUpText = (
     '    enabled: false',
     '  review: false',
     'When the user clearly asks for merge or autofix behavior, you may infer and fill required dependent options such as pull-request completion mode.',
-    'Set acceptanceCriteria whenever you can infer concrete acceptance requirements from the request. Do not omit acceptanceCriteria casually.',
+    'Set acceptanceCriteria whenever you can infer concrete acceptance requirements from the request. Focus on behavioral requirements and non-deterministic quality aspects; do not repeat items already covered by staticChecks (e.g. lint, typecheck, test commands). Do not omit acceptanceCriteria casually.',
     'If you genuinely cannot infer meaningful acceptanceCriteria, omission is allowed.',
     'Do not ask the user to confirm. Call set-ralph-loop exactly once with the resolved parameters.',
     'After calling set-ralph-loop, immediately continue the actual task work. Do not stop after configuration.',
@@ -230,12 +225,10 @@ const sendNaturalLanguageConfigurationRequest = (
 
 const patternOptions = (
   defaults: RalphLoopDefaults,
-  requirement: string,
   preset: Omit<RalphLoopOptions, 'staticChecks' | 'acceptanceCriteria'>,
-): RalphLoopOptions => ({
+): Omit<RalphLoopOptions, 'acceptanceCriteria'> => ({
   ...preset,
   staticChecks: defaults.staticChecks,
-  acceptanceCriteria: buildAcceptanceCriteriaFromRequirement(requirement),
 });
 
 export const normalizePresetRequirement = (args: string): string => args;
@@ -247,7 +240,7 @@ export const createPresetCommandConfiguration = (
 ): {
   readonly notification: string;
   readonly requirement: string;
-  readonly params: RalphLoopOptions;
+  readonly params: Omit<RalphLoopOptions, 'acceptanceCriteria'>;
 } => {
   const definition = PRESET_COMMANDS[commandName];
   const requirement = normalizePresetRequirement(args);
@@ -255,7 +248,7 @@ export const createPresetCommandConfiguration = (
   return {
     notification: definition.notification,
     requirement,
-    params: patternOptions(defaults, requirement, definition.preset),
+    params: patternOptions(defaults, definition.preset),
   };
 };
 
